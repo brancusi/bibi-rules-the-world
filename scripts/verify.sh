@@ -2,7 +2,7 @@
 set -euo pipefail
 
 failed=0
-for command_name in node npm git gh jq pi herdr treehouse no-mistakes \
+for command_name in node npm git gh jq pi herdr treehouse no-mistakes firecrawl \
   gh-axi chrome-devtools-axi lavish-axi tasks-axi quota-axi; do
   if command -v "$command_name" >/dev/null 2>&1; then
     printf 'ok       %s\n' "$command_name"
@@ -19,6 +19,11 @@ pi --version || true
 herdr --version || true
 treehouse --version || true
 no-mistakes --version || true
+if command -v firecrawl >/dev/null 2>&1; then
+  firecrawl --version 2>/dev/null || firecrawl --help 2>/dev/null | head -n 1 || true
+else
+  echo "firecrawl not installed"
+fi
 
 printf '\nFirstMate\n'
 git -C "$HOME/firstmate" status --short --branch || failed=1

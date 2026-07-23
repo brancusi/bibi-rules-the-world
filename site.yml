@@ -282,6 +282,18 @@
         or 'changed' in axi_install.stdout
         or 'removed' in axi_install.stdout
 
+    - name: Install pinned Firecrawl CLI without package lifecycle scripts
+      become: true
+      become_user: "{{ bibi_agent_user }}"
+      ansible.builtin.command:
+        cmd: "npm install --global --ignore-scripts {{ firecrawl_cli_package }}"
+      environment: *bibi_environment
+      register: firecrawl_cli_install
+      changed_when: >-
+        'added' in firecrawl_cli_install.stdout
+        or 'changed' in firecrawl_cli_install.stdout
+        or 'removed' in firecrawl_cli_install.stdout
+
     - name: Install AXI hooks
       become: true
       become_user: "{{ bibi_agent_user }}"

@@ -17,6 +17,7 @@ nodesource_key_sha256: "b42e0321dabdc24e892115da705cf061167eac12a317f23d329862d0
 
 # Exact npm pins observed on 2026-07-22. Deliberately update these in a PR.
 pi_version: "0.81.1"
+firecrawl_cli_package: "firecrawl-cli@1.19.27"
 axi_packages:
   - "gh-axi@0.1.27"
   - "chrome-devtools-axi@0.1.27"
