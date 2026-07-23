@@ -15,7 +15,7 @@ Pi, Herdr, FirstMate, source code, builds, and credentials stay on the Droplet.
 - Herdr as the persistent FirstMate backend
 - FirstMate pinned to a reviewed Git commit
 - checksum-pinned Herdr, Treehouse, and no-mistakes binaries
-- exact npm pins for Pi and the required AXI tools
+- exact npm pins for Pi, Firecrawl CLI, and the required AXI tools
 - SSH key authentication only, no root SSH, no agent forwarding
 - the DigitalOcean bootstrap key is removed from root after it is copied to
   `bibi-admin` and `bibi`
@@ -151,14 +151,27 @@ Everything in this section runs after `ssh bibi`:
 ```bash
 gh auth login
 gh auth setup-git
+firecrawl login --browser
+firecrawl --status
 pi
+```
+
+If you prefer non-interactive Firecrawl setup, set `FIRECRAWL_API_KEY` in the
+remote VM environment instead of running `firecrawl login --browser`. Firecrawl
+can use its keyless free tier for supported commands, but a logged-in API key is
+preferred for usable limits. To disable Firecrawl telemetry, optionally add this
+to the remote shell environment:
+
+```bash
+export FIRECRAWL_NO_TELEMETRY=1
 ```
 
 Inside Pi, use `/login` for your model provider, then exit. Approve Pi's trust
 prompt the first time you launch it from `~/firstmate`; that allows
 FirstMate's tracked Pi extensions to load.
 
-Credentials stay on the remote VM. Do not forward your Mac's SSH agent.
+Credentials, including Firecrawl credentials, stay on the remote VM. Do not
+forward your Mac's SSH agent.
 
 ## 7. Launch the persistent flight deck
 
