@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+if [[ ${EUID} -ne 0 ]]; then
+  echo "Run this through sudo from the {{ bibi_admin_user }} account." >&2
+  exit 1
+fi
+
+exec ansible-pull \
+  --url "{{ bibi_config_repo_url }}" \
+  --checkout "{{ bibi_config_repo_ref }}" \
+  --inventory "localhost," \
+  --connection local \
+  site.yml
+

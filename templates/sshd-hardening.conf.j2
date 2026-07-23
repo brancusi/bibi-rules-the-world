@@ -1,0 +1,18 @@
+# Managed by bibi-rules-the-world. Local edits will be replaced.
+PermitRootLogin no
+PasswordAuthentication no
+KbdInteractiveAuthentication no
+PubkeyAuthentication yes
+AuthenticationMethods publickey
+AllowUsers {{ bibi_admin_user }} {{ bibi_agent_user }}
+AllowAgentForwarding no
+AllowTcpForwarding yes
+AllowStreamLocalForwarding no
+GatewayPorts no
+PermitTunnel no
+X11Forwarding no
+PermitUserEnvironment no
+MaxAuthTries 3
+LoginGraceTime 30
+ClientAliveInterval 300
+ClientAliveCountMax 2

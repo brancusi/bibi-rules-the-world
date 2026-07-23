@@ -1,0 +1,8 @@
+cloud-init.rendered.yaml
+*.retry
+.ansible/
+.DS_Store
+
+.lsp
+.calva
+.clj-kondo

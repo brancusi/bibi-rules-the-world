@@ -1,0 +1,428 @@
+---
+- name: Build Bibi's persistent FirstMate machine
+  hosts: all
+  connection: local
+  become: true
+  gather_facts: true
+
+  pre_tasks:
+    - name: Refuse unsupported operating systems
+      ansible.builtin.assert:
+        that:
+          - ansible_distribution == "Ubuntu"
+          - ansible_distribution_version is version('24.04', '>=')
+        fail_msg: "This playbook targets Ubuntu 24.04 LTS or newer."
+
+    - name: Refuse unsupported CPU architectures
+      ansible.builtin.assert:
+        that:
+          - ansible_architecture in no_mistakes_archives
+        fail_msg: "Supported architectures are x86_64 and aarch64."
+
+  tasks:
+    - name: Install base development and security packages
+      ansible.builtin.apt:
+        name:
+          - apt-transport-https
+          - build-essential
+          - ca-certificates
+          - curl
+          - fail2ban
+          - fd-find
+          - git
+          - gh
+          - gnupg
+          - jq
+          - less
+          - ncurses-term
+          - python3
+          - python3-pip
+          - ripgrep
+          - shellcheck
+          - unattended-upgrades
+          - unzip
+          - ufw
+          - zip
+        state: present
+        update_cache: true
+        cache_valid_time: 3600
+
+    - name: Ensure the maintenance account exists
+      ansible.builtin.user:
+        name: "{{ bibi_admin_user }}"
+        comment: "Bibi machine administrator"
+        create_home: true
+        shell: /bin/bash
+        groups: [sudo]
+        append: true
+        password_lock: true
+
+    - name: Create the unprivileged daily agent user
+      ansible.builtin.user:
+        name: "{{ bibi_agent_user }}"
+        comment: "Bibi FirstMate agent"
+        create_home: true
+        home: "{{ bibi_agent_home }}"
+        shell: /bin/bash
+        groups: ""
+        append: false
+        password_lock: true
+
+    - name: Create the agent SSH directory
+      ansible.builtin.file:
+        path: "{{ bibi_agent_home }}/.ssh"
+        state: directory
+        owner: "{{ bibi_agent_user }}"
+        group: "{{ bibi_agent_user }}"
+        mode: "0700"
+
+    - name: Give the agent user the DigitalOcean-provided SSH key
+      ansible.builtin.copy:
+        src: "/home/{{ bibi_admin_user }}/.ssh/authorized_keys"
+        dest: "{{ bibi_agent_home }}/.ssh/authorized_keys"
+        remote_src: true
+        owner: "{{ bibi_agent_user }}"
+        group: "{{ bibi_agent_user }}"
+        mode: "0600"
+
+    - name: Ensure root has an SSH directory
+      ansible.builtin.file:
+        path: /root/.ssh
+        state: directory
+        owner: root
+        group: root
+        mode: "0700"
+
+    # Both admin and agent accounts hold the key by now, and sshd refuses
+    # root logins anyway. Removing the bootstrap copy closes the fallback.
+    - name: Remove the DigitalOcean bootstrap SSH key from root
+      ansible.builtin.copy:
+        dest: /root/.ssh/authorized_keys
+        owner: root
+        group: root
+        mode: "0600"
+        content: |
+          # Managed by bibi-rules-the-world. Root SSH login is disabled.
+          # Use the {{ bibi_admin_user }} account for maintenance.
+
+    - name: Keep administration separate from agent execution
+      ansible.builtin.copy:
+        dest: "/etc/sudoers.d/90-bibi-admin"
+        owner: root
+        group: root
+        mode: "0440"
+        validate: "/usr/sbin/visudo -cf %s"
+        content: |
+          {{ bibi_admin_user }} ALL=(ALL) NOPASSWD: ALL
+
+    - name: Harden SSH without breaking development port forwarding
+      ansible.builtin.template:
+        src: templates/sshd-hardening.conf.j2
+        dest: /etc/ssh/sshd_config.d/60-bibi-hardening.conf
+        owner: root
+        group: root
+        mode: "0644"
+      notify: Validate and reload SSH
+
+    - name: Apply SSH hardening before installing agent tooling
+      ansible.builtin.meta: flush_handlers
+
+    - name: Enable automatic security updates
+      ansible.builtin.copy:
+        dest: /etc/apt/apt.conf.d/52bibi-security-updates
+        owner: root
+        group: root
+        mode: "0644"
+        content: |
+          APT::Periodic::Enable "1";
+          APT::Periodic::Update-Package-Lists "1";
+          APT::Periodic::Unattended-Upgrade "1";
+          Unattended-Upgrade::Remove-Unused-Dependencies "true";
+
+    - name: Enable unattended upgrades
+      ansible.builtin.systemd_service:
+        name: unattended-upgrades
+        enabled: true
+        state: started
+
+    - name: Set firewall defaults
+      ansible.builtin.command: "{{ item }}"
+      loop:
+        - ufw default deny incoming
+        - ufw default allow outgoing
+        - ufw limit OpenSSH
+      changed_when: false
+
+    - name: Enable the host firewall
+      ansible.builtin.command: ufw --force enable
+      register: ufw_enable
+      changed_when: "'already enabled' not in ufw_enable.stdout"
+
+    - name: Enable SSH abuse throttling
+      ansible.builtin.copy:
+        dest: /etc/fail2ban/jail.d/sshd.local
+        owner: root
+        group: root
+        mode: "0644"
+        content: |
+          [sshd]
+          enabled = true
+          backend = systemd
+          maxretry = 5
+          findtime = 10m
+          bantime = 1h
+      notify: Restart fail2ban
+
+    - name: Start SSH abuse throttling
+      ansible.builtin.systemd_service:
+        name: fail2ban
+        enabled: true
+        state: started
+
+    - name: Download the pinned NodeSource signing key
+      ansible.builtin.get_url:
+        url: https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key
+        dest: /usr/share/keyrings/nodesource-repo.asc
+        checksum: "sha256:{{ nodesource_key_sha256 }}"
+        owner: root
+        group: root
+        mode: "0644"
+
+    - name: Convert the NodeSource key to an apt keyring
+      ansible.builtin.command:
+        cmd: gpg --dearmor --yes --output /usr/share/keyrings/nodesource.gpg /usr/share/keyrings/nodesource-repo.asc
+      changed_when: false
+
+    - name: Configure the NodeSource repository
+      ansible.builtin.apt_repository:
+        repo: >-
+          deb [arch={{ 'amd64' if ansible_architecture == 'x86_64' else 'arm64' }}
+          signed-by=/usr/share/keyrings/nodesource.gpg]
+          https://deb.nodesource.com/node_{{ node_major }}.x nodistro main
+        filename: nodesource
+        state: present
+
+    - name: Install Node.js
+      ansible.builtin.apt:
+        name: nodejs
+        state: present
+        update_cache: true
+
+    - name: Provide fd under its usual name
+      ansible.builtin.file:
+        src: /usr/bin/fdfind
+        dest: /usr/local/bin/fd
+        state: link
+
+    - name: Create Bibi's local executable directory
+      ansible.builtin.file:
+        path: "{{ bibi_agent_home }}/.local/bin"
+        state: directory
+        owner: "{{ bibi_agent_user }}"
+        group: "{{ bibi_agent_user }}"
+        mode: "0755"
+
+    - name: Configure user-owned npm global installs
+      ansible.builtin.copy:
+        dest: "{{ bibi_agent_home }}/.npmrc"
+        owner: "{{ bibi_agent_user }}"
+        group: "{{ bibi_agent_user }}"
+        mode: "0600"
+        content: |
+          prefix={{ bibi_agent_home }}/.local
+          fund=false
+          audit=true
+
+    - name: Put user tools on PATH
+      ansible.builtin.blockinfile:
+        path: "{{ bibi_agent_home }}/.profile"
+        create: true
+        owner: "{{ bibi_agent_user }}"
+        group: "{{ bibi_agent_user }}"
+        mode: "0644"
+        marker: "# {mark} BIBI MANAGED PATH"
+        block: |
+          export PATH="$HOME/.local/bin:$PATH"
+
+    - name: Put user tools on interactive shell PATH
+      ansible.builtin.blockinfile:
+        path: "{{ bibi_agent_home }}/.bashrc"
+        create: true
+        owner: "{{ bibi_agent_user }}"
+        group: "{{ bibi_agent_user }}"
+        mode: "0644"
+        marker: "# {mark} BIBI MANAGED PATH"
+        block: |
+          export PATH="$HOME/.local/bin:$PATH"
+          export EDITOR="${EDITOR:-nano}"
+
+    - name: Install pinned Pi without package lifecycle scripts
+      become: true
+      become_user: "{{ bibi_agent_user }}"
+      ansible.builtin.command:
+        cmd: "npm install --global --ignore-scripts @earendil-works/pi-coding-agent@{{ pi_version }}"
+      environment: &bibi_environment
+        HOME: "{{ bibi_agent_home }}"
+        PATH: "{{ bibi_agent_home }}/.local/bin:/usr/local/bin:/usr/bin:/bin"
+      register: pi_install
+      changed_when: >-
+        'added' in pi_install.stdout
+        or 'changed' in pi_install.stdout
+        or 'removed' in pi_install.stdout
+
+    - name: Install pinned FirstMate AXI tools without package lifecycle scripts
+      become: true
+      become_user: "{{ bibi_agent_user }}"
+      ansible.builtin.command:
+        cmd: "npm install --global --ignore-scripts {{ axi_packages | join(' ') }}"
+      environment: *bibi_environment
+      register: axi_install
+      changed_when: >-
+        'added' in axi_install.stdout
+        or 'changed' in axi_install.stdout
+        or 'removed' in axi_install.stdout
+
+    - name: Install AXI hooks
+      become: true
+      become_user: "{{ bibi_agent_user }}"
+      ansible.builtin.command: "{{ item }} setup hooks"
+      loop:
+        - gh-axi
+        - chrome-devtools-axi
+        - lavish-axi
+      environment: *bibi_environment
+      changed_when: false
+
+    - name: Clone the pinned FirstMate distro
+      become: true
+      become_user: "{{ bibi_agent_user }}"
+      ansible.builtin.git:
+        repo: "{{ firstmate_repo_url }}"
+        dest: "{{ bibi_agent_home }}/firstmate"
+        version: "{{ firstmate_ref }}"
+        update: true
+        force: false
+
+    - name: Create FirstMate's local configuration directory
+      ansible.builtin.file:
+        path: "{{ bibi_agent_home }}/firstmate/config"
+        state: directory
+        owner: "{{ bibi_agent_user }}"
+        group: "{{ bibi_agent_user }}"
+        mode: "0755"
+
+    - name: Select Herdr as FirstMate's backend
+      ansible.builtin.copy:
+        dest: "{{ bibi_agent_home }}/firstmate/config/backend"
+        owner: "{{ bibi_agent_user }}"
+        group: "{{ bibi_agent_user }}"
+        mode: "0644"
+        content: "herdr\n"
+
+    - name: Select Pi as FirstMate's crew harness
+      ansible.builtin.copy:
+        dest: "{{ bibi_agent_home }}/firstmate/config/crew-harness"
+        owner: "{{ bibi_agent_user }}"
+        group: "{{ bibi_agent_user }}"
+        mode: "0644"
+        content: "pi\n"
+
+    - name: Install FirstMate's checksum-pinned Herdr build
+      become: true
+      become_user: "{{ bibi_agent_user }}"
+      ansible.builtin.command:
+        cmd: "{{ bibi_agent_home }}/firstmate/bin/fm-install-herdr.sh {{ bibi_agent_home }}/.local/bin"
+      environment: *bibi_environment
+      changed_when: false
+
+    - name: Install FirstMate's checksum-pinned Treehouse build
+      become: true
+      become_user: "{{ bibi_agent_user }}"
+      ansible.builtin.command:
+        cmd: "{{ bibi_agent_home }}/firstmate/bin/fm-install-treehouse.sh {{ bibi_agent_home }}/.local/bin"
+      environment: *bibi_environment
+      changed_when: false
+
+    - name: Set no-mistakes release facts
+      ansible.builtin.set_fact:
+        no_mistakes_release: "{{ no_mistakes_archives[ansible_architecture] }}"
+        no_mistakes_archive: "no-mistakes-v{{ no_mistakes_version }}-linux-{{ no_mistakes_archives[ansible_architecture].arch }}.tar.gz"
+
+    - name: Download pinned no-mistakes
+      ansible.builtin.get_url:
+        url: "https://github.com/kunchenguid/no-mistakes/releases/download/v{{ no_mistakes_version }}/{{ no_mistakes_archive }}"
+        dest: "/var/tmp/{{ no_mistakes_archive }}"
+        checksum: "sha256:{{ no_mistakes_release.sha256 }}"
+        mode: "0644"
+
+    - name: Create no-mistakes extraction directory
+      ansible.builtin.file:
+        path: "/var/tmp/no-mistakes-{{ no_mistakes_version }}"
+        state: directory
+        mode: "0755"
+
+    - name: Extract pinned no-mistakes
+      ansible.builtin.unarchive:
+        src: "/var/tmp/{{ no_mistakes_archive }}"
+        dest: "/var/tmp/no-mistakes-{{ no_mistakes_version }}"
+        remote_src: true
+        creates: "/var/tmp/no-mistakes-{{ no_mistakes_version }}/no-mistakes"
+
+    - name: Install no-mistakes for the agent user
+      ansible.builtin.copy:
+        src: "/var/tmp/no-mistakes-{{ no_mistakes_version }}/no-mistakes"
+        dest: "{{ bibi_agent_home }}/.local/bin/no-mistakes"
+        remote_src: true
+        owner: "{{ bibi_agent_user }}"
+        group: "{{ bibi_agent_user }}"
+        mode: "0755"
+
+    - name: Install the one-word FirstMate launcher
+      ansible.builtin.template:
+        src: templates/bibi-launcher.j2
+        dest: "{{ bibi_agent_home }}/.local/bin/bibi"
+        owner: "{{ bibi_agent_user }}"
+        group: "{{ bibi_agent_user }}"
+        mode: "0755"
+
+    - name: Install the verification command
+      ansible.builtin.copy:
+        src: scripts/verify.sh
+        dest: "{{ bibi_agent_home }}/.local/bin/bibi-verify"
+        owner: "{{ bibi_agent_user }}"
+        group: "{{ bibi_agent_user }}"
+        mode: "0755"
+
+    - name: Install the administrator update command
+      ansible.builtin.template:
+        src: templates/bibi-machine-update.j2
+        dest: /usr/local/sbin/bibi-machine-update
+        owner: root
+        group: root
+        mode: "0755"
+
+    - name: Install Bibi's login banner
+      ansible.builtin.template:
+        src: templates/bibi-motd.j2
+        dest: /etc/update-motd.d/99-bibi
+        owner: root
+        group: root
+        mode: "0755"
+
+    - name: Record the provisioned versions
+      ansible.builtin.template:
+        src: templates/provisioned-versions.j2
+        dest: /etc/bibi-provisioned-versions
+        owner: root
+        group: root
+        mode: "0644"
+
+  handlers:
+    - name: Validate and reload SSH
+      ansible.builtin.shell: /usr/sbin/sshd -t && systemctl reload ssh
+      changed_when: true
+
+    - name: Restart fail2ban
+      ansible.builtin.systemd_service:
+        name: fail2ban
+        state: restarted

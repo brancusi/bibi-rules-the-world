@@ -1,0 +1,46 @@
+#cloud-config
+#
+# Render this file before pasting it into DigitalOcean:
+#   ./scripts/render-cloud-init.sh https://github.com/YOU/bibi-rules-the-world.git
+#
+# The repository must be readable without embedding a secret in user-data.
+
+hostname: bibi-rules-the-world
+manage_etc_hosts: true
+package_update: true
+package_upgrade: false
+ssh_pwauth: false
+# disable_root stays false so DigitalOcean's injected key lands unmodified in
+# /root/.ssh/authorized_keys, where runcmd copies it to bibi-admin. The Ansible
+# playbook then removes root's copy and sshd denies root logins outright.
+disable_root: false
+
+users:
+  - name: bibi-admin
+    gecos: Bibi machine administrator
+    shell: /bin/bash
+    groups: [sudo]
+    sudo: ["ALL=(ALL) NOPASSWD:ALL"]
+    lock_passwd: true
+
+packages:
+  - ansible
+  - git
+
+write_files:
+  - path: /etc/bibi-bootstrap-source
+    owner: root:root
+    permissions: "0644"
+    content: |
+      repo=__BIBI_CONFIG_REPO__
+      ref=__BIBI_CONFIG_REF__
+
+runcmd:
+  - [install, -d, -m, "0700", -o, bibi-admin, -g, bibi-admin, /home/bibi-admin/.ssh]
+  - [sh, -c, "test -s /root/.ssh/authorized_keys || { echo 'DigitalOcean did not inject an SSH key; refusing to harden SSH' >&2; exit 1; }"]
+  - [cp, /root/.ssh/authorized_keys, /home/bibi-admin/.ssh/authorized_keys]
+  - [chown, bibi-admin:bibi-admin, /home/bibi-admin/.ssh/authorized_keys]
+  - [chmod, "0600", /home/bibi-admin/.ssh/authorized_keys]
+  - [ansible-pull, --url, "__BIBI_CONFIG_REPO__", --checkout, "__BIBI_CONFIG_REF__", --inventory, "localhost,", --connection, local, site.yml]
+
+final_message: "Bibi rules the world. Provisioning finished after $UPTIME seconds."

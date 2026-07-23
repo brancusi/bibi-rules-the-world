@@ -1,0 +1,48 @@
+---
+name: Validate Bibi's world
+
+"on":
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  configuration:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Check out the configuration
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Install validators
+        run: python3 -m pip install ansible-core ansible-lint yamllint
+
+      - name: Validate YAML
+        run: >-
+          yamllint
+          -d '{extends: default, rules: {line-length: {max: 160}, document-start: disable, comments: disable}}'
+          cloud-init.yaml group_vars/all.yml site.yml
+
+      - name: Lint the Ansible playbook
+        run: ansible-lint site.yml
+
+      - name: Check Ansible syntax
+        run: ansible-playbook --syntax-check -i 'localhost,' site.yml
+
+      - name: Check shell syntax
+        run: bash -n scripts/render-cloud-init.sh scripts/verify.sh
+
+      - name: Lint shell scripts and shell templates
+        run: |
+          shellcheck scripts/render-cloud-init.sh scripts/verify.sh
+          shellcheck templates/bibi-launcher.j2 templates/bibi-machine-update.j2 templates/bibi-motd.j2
+
+      - name: Exercise cloud-init rendering
+        run: |
+          scripts/render-cloud-init.sh \
+            https://github.com/example/bibi-rules-the-world.git \
+            > /tmp/cloud-init.rendered.yaml
+          ! grep -E '__BIBI_CONFIG_(REPO|REF)__' /tmp/cloud-init.rendered.yaml
+          python3 -c 'import yaml, sys; yaml.safe_load(open("/tmp/cloud-init.rendered.yaml"))'
