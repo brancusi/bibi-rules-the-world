@@ -1,6 +1,6 @@
 ---
 # Change this before publishing your configuration repository.
-bibi_config_repo_url: "https://github.com/YOUR_GITHUB_USERNAME/bibi-rules-the-world.git"
+bibi_config_repo_url: "https://github.com/brancusi/bibi-rules-the-world.git"
 bibi_config_repo_ref: "main"
 
 bibi_admin_user: "bibi-admin"
