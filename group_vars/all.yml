@@ -48,7 +48,7 @@ doctl_archives:
 # official doctl 1.165.0+ (1.x), and the pi-ai, coding-agent, pi-tui, and
 # typebox core peers supplied by Pi.
 pi_extensions_repo_url: "https://github.com/brancusi/pi-extensions.git"
-pi_extensions_ref: "534261467688be6e854192a5e317f94e0af7f3af"
+pi_extensions_ref: "bdacbf815b64183855f174865a3f54272c9d0501"
 pi_extensions_package_version: "1.1.0"
 
 no_mistakes_version: "1.40.0"
