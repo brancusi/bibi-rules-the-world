@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+readonly package_source="{{ pi_extensions_repo_url }}@{{ pi_extensions_ref }}"
+
+if ! gh auth status --hostname github.com >/dev/null 2>&1; then
+  echo "GitHub authentication is required. Run 'gh auth login', then retry." >&2
+  exit 1
+fi
+
+# Install GitHub CLI's credential helper into Git's configuration. Pi's normal
+# Git package installer then obtains private-repository credentials from gh;
+# no token is copied into argv, the environment, this script, or Pi settings.
+gh auth setup-git
+
+GIT_TERMINAL_PROMPT=0 pi install "$package_source"
+pi list

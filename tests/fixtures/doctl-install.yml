@@ -1,0 +1,9 @@
+---
+- name: Exercise the doctl installation tasks without root or network access
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  become: false
+  tasks:
+    - name: Run the production doctl installer
+      ansible.builtin.include_tasks: ../../tasks/install-doctl.yml

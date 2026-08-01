@@ -17,6 +17,7 @@
       ansible.builtin.assert:
         that:
           - ansible_architecture in no_mistakes_archives
+          - ansible_architecture in doctl_archives
         fail_msg: "Supported architectures are x86_64 and aarch64."
 
   tasks:
@@ -178,6 +179,9 @@
         name: fail2ban
         enabled: true
         state: started
+
+    - name: Install and verify the pinned official doctl release
+      ansible.builtin.include_tasks: tasks/install-doctl.yml
 
     - name: Download the pinned NodeSource signing key
       ansible.builtin.get_url:
@@ -401,6 +405,14 @@
       ansible.builtin.copy:
         src: scripts/verify.sh
         dest: "{{ bibi_agent_home }}/.local/bin/bibi-verify"
+        owner: "{{ bibi_agent_user }}"
+        group: "{{ bibi_agent_user }}"
+        mode: "0755"
+
+    - name: Install the private Pi collection bootstrap and update command
+      ansible.builtin.template:
+        src: templates/bibi-pi-extensions-update.j2
+        dest: "{{ bibi_agent_home }}/.local/bin/bibi-pi-extensions-update"
         owner: "{{ bibi_agent_user }}"
         group: "{{ bibi_agent_user }}"
         mode: "0755"

@@ -14,8 +14,9 @@ Pi, Herdr, FirstMate, source code, builds, and credentials stay on the Droplet.
 - Pi as primary and crew harness
 - Herdr as the persistent FirstMate backend
 - FirstMate pinned to a reviewed Git commit
-- checksum-pinned Herdr, Treehouse, and no-mistakes binaries
+- checksum-pinned Herdr, Treehouse, no-mistakes, and official `doctl` binaries
 - exact npm pins for Pi, Firecrawl CLI, and the required AXI tools
+- a reviewed commit pin and daily-user installer for the private Pi Extensions collection
 - SSH key authentication only, no root SSH, no agent forwarding
 - the DigitalOcean bootstrap key is removed from root after it is copied to
   `bibi-admin` and `bibi`
@@ -107,7 +108,11 @@ sudo tail -n 200 /var/log/cloud-init-output.log
 ```
 
 Provisioning downloads and verifies several tools and can take a few minutes.
-Do not interrupt it midway.
+The official DigitalOcean CLI is selected for the machine architecture, checked
+against the reviewed release archive SHA-256, required to report the pinned
+version, and installed as root-owned mode `0555` at `/usr/local/bin/doctl`.
+Provisioning does **not** authenticate doctl or fetch the private Pi Extensions
+repository. Do not interrupt provisioning midway.
 
 ## 5. Configure plain SSH for WezTerm
 
@@ -144,17 +149,41 @@ to compare the shown fingerprint with:
 ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub
 ```
 
-## 6. Authenticate once on the remote VM
+## 6. Authenticate and install the private Pi package
 
-Everything in this section runs after `ssh bibi`:
+Public machine provisioning ends before this section. Everything below runs as
+the daily user after `ssh bibi`; none of it belongs in cloud-init or Ansible.
+First authenticate GitHub, then install the reviewed private collection pin:
 
 ```bash
 gh auth login
-gh auth setup-git
+bibi-pi-extensions-update
 firecrawl login --browser
 firecrawl --status
 pi
 ```
+
+`bibi-pi-extensions-update` checks the GitHub CLI login, configures Git to use
+GitHub CLI's credential helper, and invokes Pi's official Git package installer
+against the exact reviewed commit over HTTPS. It disables terminal credential
+prompts, never copies or forwards a GitHub token, and is safe to rerun to
+reconcile the checkout. The private repository is not fetched until this step.
+
+Inside Pi, use `/login` for your model provider. Then create and accept a named
+DigitalOcean context through the extension's masked local UI:
+
+```text
+/digitalocean-login hey-coach
+```
+
+Enter a newly created least-privilege DigitalOcean API token only in that masked
+prompt and confirm the displayed account/team identity. Never paste the token
+into chat, a shell command, Pi settings, Git, or this repository. Provisioning
+never runs `doctl auth`, creates a context, or contains a DigitalOcean/GitHub
+token. The extension requires Node.js 22+, Pi 0.81.1-compatible
+`pi-ai`, `coding-agent`, `pi-tui`, and `typebox` core peers, plus official
+doctl 1.165.0+ in the 1.x series. Pi supplies those peers; this repo pins
+compatible Pi 0.81.1 and doctl 1.166.0.
 
 If you prefer non-interactive Firecrawl setup, set `FIRECRAWL_API_KEY` in the
 remote VM environment instead of running `firecrawl login --browser`. Firecrawl
@@ -166,12 +195,9 @@ to the remote shell environment:
 export FIRECRAWL_NO_TELEMETRY=1
 ```
 
-Inside Pi, use `/login` for your model provider, then exit. Approve Pi's trust
-prompt the first time you launch it from `~/firstmate`; that allows
-FirstMate's tracked Pi extensions to load.
-
-Credentials, including Firecrawl credentials, stay on the remote VM. Do not
-forward your Mac's SSH agent.
+Approve Pi's trust prompt the first time you launch it from `~/firstmate`; that
+allows FirstMate's tracked Pi extensions to load. Credentials stay on the
+remote VM. Do not forward your Mac's SSH agent.
 
 ## 7. Launch the persistent flight deck
 
@@ -193,13 +219,18 @@ the PTY session alive when WezTerm closes or SSH disconnects. Reconnect with
 
 ## Verify the installation
 
-As the daily user:
+As the daily user, verify command availability, the exact doctl version and
+root ownership/mode, FirstMate configuration, sudo separation, and (when
+installed) the private collection commit/package version:
 
 ```bash
 bibi-verify
 ```
 
-The provisioned version record is:
+Before the interactive GitHub step, the private collection is reported as
+`pending` without invalidating the public system build. After
+`bibi-pi-extensions-update`, it must report the reviewed commit. A different or
+unpinned collection ref is an error. The authoritative provisioned pins are:
 
 ```bash
 cat /etc/bibi-provisioned-versions
@@ -207,17 +238,29 @@ cat /etc/bibi-provisioned-versions
 
 ## Update or reconcile the VM
 
-1. Change pins or tasks in this repository.
+1. Change pins or tasks in this repository. For doctl, review both declared
+   architectures and replace both archive checksums. For Pi Extensions, review
+   and replace `pi_extensions_ref`; never use a moving branch as the package pin.
 2. Run `make lint` locally, review, and push the change.
-3. Enter through the maintenance identity:
+3. After the reviewed change lands, enter through the maintenance identity and
+   reconcile public/system state:
 
 ```bash
 ssh bibi-admin
-sudo bibi-machine-update
+sudo /usr/local/sbin/bibi-machine-update
 ```
 
-The daily `bibi` account cannot run the update command. Treat changes to this
-repository as root-level changes and protect its default branch accordingly.
+4. Return as `bibi`. If the private collection pin changed—or merely to repair
+   its checkout—rerun the authentication-gated daily-user reconciliation:
+
+```bash
+bibi-pi-extensions-update
+bibi-verify
+```
+
+The daily `bibi` account cannot run the machine update command, and the admin
+reconciliation intentionally cannot fetch the private collection. Treat changes
+to this repository as root-level changes and protect its default branch.
 
 FirstMate also has its own `/updatefirstmate` workflow. If you use it, the live
 checkout can move beyond this repo's pin; the next Ansible reconciliation may
@@ -239,11 +282,20 @@ development servers.
 
 The rebuild boundary is deliberate:
 
-- infrastructure and tools come from this repo
-- source repositories come from Git remotes
-- GitHub and Pi credentials are restored interactively
+- public infrastructure, doctl, and other system/user tools come from this repo
+- unauthenticated cloud-init never fetches `brancusi/pi-extensions`
+- after `gh auth login`, `bibi-pi-extensions-update` restores its exact reviewed pin
+- `/digitalocean-login hey-coach` restores the named doctl context interactively
+- GitHub, DigitalOcean, Firecrawl, and Pi credentials are never restored from
+  user-data or this repository
 - FirstMate's private `data/`, `state/`, and project worktrees require backup
   or deliberate recreation
+
+On a clean rebuild, first wait for cloud-init, run `bibi-verify` (the private
+package will be `pending`), perform section 6, then run `bibi-verify` again. To
+recover drift on an existing machine, reconcile as `bibi-admin`, then rerun the
+daily-user private package command; do not copy doctl configuration or tokens
+through this repo.
 
 Enable DigitalOcean backups, but remember that snapshots contain credentials
 and source code. Before destroying a VM, use FirstMate's `/stow`, push all
