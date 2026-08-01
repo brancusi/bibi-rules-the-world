@@ -1,0 +1,116 @@
+---
+- name: Refuse unsupported doctl CPU architectures
+  ansible.builtin.assert:
+    that:
+      - ansible_architecture in doctl_archives
+    fail_msg: "doctl is pinned only for x86_64 and aarch64."
+
+- name: Select the pinned doctl release artifact
+  ansible.builtin.set_fact:
+    doctl_release: "{{ doctl_archives[ansible_architecture] }}"
+    doctl_archive: "doctl-{{ doctl_version }}-linux-{{ doctl_archives[ansible_architecture].arch }}.tar.gz"
+    doctl_extract_dir: "{{ doctl_cache_dir }}/{{ doctl_version }}-{{ doctl_archives[ansible_architecture].arch }}"
+
+- name: Create the root-owned doctl cache
+  ansible.builtin.file:
+    path: "{{ doctl_cache_dir }}"
+    state: directory
+    owner: "{{ doctl_install_owner }}"
+    group: "{{ doctl_install_group }}"
+    mode: "0755"
+
+- name: Download the checksum-pinned official doctl archive
+  ansible.builtin.get_url:
+    url: "{{ doctl_release_base_url }}/v{{ doctl_version }}/{{ doctl_archive }}"
+    dest: "{{ doctl_cache_dir }}/{{ doctl_archive }}"
+    checksum: "sha256:{{ doctl_release.sha256 }}"
+    owner: "{{ doctl_install_owner }}"
+    group: "{{ doctl_install_group }}"
+    mode: "0644"
+
+- name: Create the root-owned doctl extraction directory
+  ansible.builtin.file:
+    path: "{{ doctl_extract_dir }}"
+    state: directory
+    owner: "{{ doctl_install_owner }}"
+    group: "{{ doctl_install_group }}"
+    mode: "0755"
+
+- name: Extract the pinned doctl archive
+  ansible.builtin.unarchive:
+    src: "{{ doctl_cache_dir }}/{{ doctl_archive }}"
+    dest: "{{ doctl_extract_dir }}"
+    remote_src: true
+    creates: "{{ doctl_extract_dir }}/doctl"
+
+- name: Inspect the extracted doctl binary
+  ansible.builtin.stat:
+    path: "{{ doctl_extract_dir }}/doctl"
+    follow: false
+  register: doctl_extracted_stat
+
+- name: Refuse an unsafe extracted doctl artifact
+  ansible.builtin.assert:
+    that:
+      - doctl_extracted_stat.stat.exists
+      - doctl_extracted_stat.stat.isreg
+      - not doctl_extracted_stat.stat.islnk
+      - doctl_extracted_stat.stat.executable
+    fail_msg: "The verified doctl archive did not contain a regular executable named doctl."
+
+- name: Read the extracted doctl version
+  ansible.builtin.command:
+    argv:
+      - "{{ doctl_extract_dir }}/doctl"
+      - version
+      - --output
+      - json
+  register: doctl_extracted_version
+  changed_when: false
+
+- name: Refuse an unexpected doctl version
+  ansible.builtin.assert:
+    that:
+      - (doctl_extracted_version.stdout | from_json).version == doctl_version ~ '-release'
+    fail_msg: "The verified archive does not report the pinned doctl version {{ doctl_version }}."
+
+- name: Install doctl system-wide as a root-owned read-only binary
+  ansible.builtin.copy:
+    src: "{{ doctl_extract_dir }}/doctl"
+    dest: "{{ doctl_install_path }}"
+    remote_src: true
+    owner: "{{ doctl_install_owner }}"
+    group: "{{ doctl_install_group }}"
+    mode: "{{ doctl_install_mode }}"
+
+- name: Inspect the installed doctl binary
+  ansible.builtin.stat:
+    path: "{{ doctl_install_path }}"
+    follow: false
+  register: doctl_installed_stat
+
+- name: Verify installed doctl ownership and mode
+  ansible.builtin.assert:
+    that:
+      - doctl_installed_stat.stat.isreg
+      - not doctl_installed_stat.stat.islnk
+      - doctl_installed_stat.stat.pw_name == doctl_install_owner
+      - doctl_installed_stat.stat.gr_name == doctl_install_group
+      - doctl_installed_stat.stat.mode == doctl_install_mode
+    fail_msg: "Installed doctl ownership or mode differs from the reviewed system pin."
+
+- name: Read the installed doctl version
+  ansible.builtin.command:
+    argv:
+      - "{{ doctl_install_path }}"
+      - version
+      - --output
+      - json
+  register: doctl_installed_version
+  changed_when: false
+
+- name: Verify the installed doctl version
+  ansible.builtin.assert:
+    that:
+      - (doctl_installed_version.stdout | from_json).version == doctl_version ~ '-release'
+    fail_msg: "Installed doctl does not report the pinned version {{ doctl_version }}."

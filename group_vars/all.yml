@@ -25,6 +25,32 @@ axi_packages:
   - "tasks-axi@0.2.3"
   - "quota-axi@0.1.11"
 
+# Official immutable release artifacts reviewed on 2026-08-01. The private
+# DigitalOcean Pi package requires doctl >=1.165.0 within the 1.x series.
+doctl_version: "1.166.0"
+doctl_release_base_url: "https://github.com/digitalocean/doctl/releases/download"
+doctl_cache_dir: "/var/cache/bibi/doctl"
+doctl_install_path: "/usr/local/bin/doctl"
+doctl_install_owner: "root"
+doctl_install_group: "root"
+doctl_install_mode: "0555"
+doctl_archives:
+  x86_64:
+    arch: "amd64"
+    sha256: "1596424b64091a7939bde561daf2402ca8a141966429928e688d20d17091ec89"
+  aarch64:
+    arch: "arm64"
+    sha256: "a9857d2ef4498f6affb9baae2b37b890ccc4ddda9ec01e58b63a2e99e47eb363"
+
+# This private collection is intentionally not fetched by cloud-init/Ansible.
+# After `gh auth login`, the daily user runs bibi-pi-extensions-update. The
+# merged collection at this commit requires Node.js 22+, Pi 0.81.1-compatible,
+# official doctl 1.165.0+ (1.x), and the pi-ai, coding-agent, pi-tui, and
+# typebox core peers supplied by Pi.
+pi_extensions_repo_url: "https://github.com/brancusi/pi-extensions.git"
+pi_extensions_ref: "534261467688be6e854192a5e317f94e0af7f3af"
+pi_extensions_package_version: "1.1.0"
+
 no_mistakes_version: "1.40.0"
 no_mistakes_archives:
   x86_64:

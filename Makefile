@@ -6,21 +6,25 @@
 SHELL := bash
 YAMLLINT_CONFIG := {extends: default, rules: {line-length: {max: 160}, document-start: disable, comments: disable}}
 
-.PHONY: lint yaml ansible shell render
+.PHONY: lint yaml ansible shell test render
 
-lint: yaml ansible shell
+lint: yaml ansible shell test
 
 yaml:
-	yamllint -d '$(YAMLLINT_CONFIG)' cloud-init.yaml group_vars/all.yml site.yml
+	yamllint -d '$(YAMLLINT_CONFIG)' cloud-init.yaml group_vars/all.yml site.yml tasks/install-doctl.yml tests/fixtures/doctl-install.yml
 
 ansible:
-	ansible-lint site.yml
+	ansible-lint site.yml tests/fixtures/doctl-install.yml
 	ansible-playbook --syntax-check -i 'localhost,' site.yml
+	ansible-playbook --syntax-check -i 'localhost,' tests/fixtures/doctl-install.yml
 
 shell:
-	bash -n scripts/render-cloud-init.sh scripts/verify.sh
-	shellcheck scripts/render-cloud-init.sh scripts/verify.sh
-	shellcheck templates/bibi-launcher.j2 templates/bibi-machine-update.j2 templates/bibi-motd.j2
+	bash -n scripts/render-cloud-init.sh scripts/test-provisioning.sh scripts/verify.sh
+	shellcheck scripts/render-cloud-init.sh scripts/test-provisioning.sh scripts/verify.sh
+	shellcheck templates/bibi-launcher.j2 templates/bibi-machine-update.j2 templates/bibi-motd.j2 templates/bibi-pi-extensions-update.j2
+
+test:
+	./scripts/test-provisioning.sh
 
 render:
 ifndef REPO

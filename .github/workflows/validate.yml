@@ -23,26 +23,23 @@ jobs:
         run: >-
           yamllint
           -d '{extends: default, rules: {line-length: {max: 160}, document-start: disable, comments: disable}}'
-          cloud-init.yaml group_vars/all.yml site.yml
+          cloud-init.yaml group_vars/all.yml site.yml tasks/install-doctl.yml tests/fixtures/doctl-install.yml
 
-      - name: Lint the Ansible playbook
-        run: ansible-lint site.yml
+      - name: Lint the Ansible playbooks
+        run: ansible-lint site.yml tests/fixtures/doctl-install.yml
 
       - name: Check Ansible syntax
-        run: ansible-playbook --syntax-check -i 'localhost,' site.yml
+        run: |
+          ansible-playbook --syntax-check -i 'localhost,' site.yml
+          ansible-playbook --syntax-check -i 'localhost,' tests/fixtures/doctl-install.yml
 
       - name: Check shell syntax
-        run: bash -n scripts/render-cloud-init.sh scripts/verify.sh
+        run: bash -n scripts/render-cloud-init.sh scripts/test-provisioning.sh scripts/verify.sh
 
       - name: Lint shell scripts and shell templates
         run: |
-          shellcheck scripts/render-cloud-init.sh scripts/verify.sh
-          shellcheck templates/bibi-launcher.j2 templates/bibi-machine-update.j2 templates/bibi-motd.j2
+          shellcheck scripts/render-cloud-init.sh scripts/test-provisioning.sh scripts/verify.sh
+          shellcheck templates/bibi-launcher.j2 templates/bibi-machine-update.j2 templates/bibi-motd.j2 templates/bibi-pi-extensions-update.j2
 
-      - name: Exercise cloud-init rendering
-        run: |
-          scripts/render-cloud-init.sh \
-            https://github.com/example/bibi-rules-the-world.git \
-            > /tmp/cloud-init.rendered.yaml
-          ! grep -E '__BIBI_CONFIG_(REPO|REF)__' /tmp/cloud-init.rendered.yaml
-          python3 -c 'import yaml, sys; yaml.safe_load(open("/tmp/cloud-init.rendered.yaml"))'
+      - name: Exercise provisioning and verification fixtures
+        run: scripts/test-provisioning.sh
