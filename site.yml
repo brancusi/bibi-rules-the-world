@@ -274,6 +274,23 @@
         or 'changed' in pi_install.stdout
         or 'removed' in pi_install.stdout
 
+    - name: Install the public Pi package reconciliation command
+      ansible.builtin.template:
+        src: templates/bibi-pi-public-packages-update.j2
+        dest: "{{ bibi_agent_home }}/.local/bin/bibi-pi-public-packages-update"
+        owner: "{{ bibi_agent_user }}"
+        group: "{{ bibi_agent_user }}"
+        mode: "0755"
+
+    - name: Reconcile pinned public Pi packages for the daily user
+      become: true
+      become_user: "{{ bibi_agent_user }}"
+      ansible.builtin.command:
+        cmd: "{{ bibi_agent_home }}/.local/bin/bibi-pi-public-packages-update"
+      environment: *bibi_environment
+      register: public_pi_packages_reconcile
+      changed_when: "'reconciled' in public_pi_packages_reconcile.stdout"
+
     - name: Install pinned FirstMate AXI tools without package lifecycle scripts
       become: true
       become_user: "{{ bibi_agent_user }}"
@@ -286,6 +303,18 @@
         or 'changed' in axi_install.stdout
         or 'removed' in axi_install.stdout
 
+    - name: Install pinned Wrangler without package lifecycle scripts
+      become: true
+      become_user: "{{ bibi_agent_user }}"
+      ansible.builtin.command:
+        cmd: "npm install --global --ignore-scripts {{ wrangler_package }}"
+      environment: *bibi_environment
+      register: wrangler_install
+      changed_when: >-
+        'added' in wrangler_install.stdout
+        or 'changed' in wrangler_install.stdout
+        or 'removed' in wrangler_install.stdout
+
     - name: Install pinned Firecrawl CLI without package lifecycle scripts
       become: true
       become_user: "{{ bibi_agent_user }}"
@@ -297,6 +326,11 @@
         'added' in firecrawl_cli_install.stdout
         or 'changed' in firecrawl_cli_install.stdout
         or 'removed' in firecrawl_cli_install.stdout
+
+    - name: Install the reviewed official Cloudflare skills
+      ansible.builtin.include_tasks: tasks/install-cloudflare-skills.yml
+      vars:
+        cloudflare_skills_owner: "{{ bibi_agent_user }}"
 
     - name: Install AXI hooks
       become: true

@@ -23,15 +23,17 @@ jobs:
         run: >-
           yamllint
           -d '{extends: default, rules: {line-length: {max: 160}, document-start: disable, comments: disable}}'
-          cloud-init.yaml group_vars/all.yml site.yml tasks/install-doctl.yml tests/fixtures/doctl-install.yml
+          cloud-init.yaml group_vars/all.yml site.yml tasks/install-doctl.yml tasks/install-cloudflare-skills.yml
+          tests/fixtures/doctl-install.yml tests/fixtures/cloudflare-skills-install.yml
 
       - name: Lint the Ansible playbooks
-        run: ansible-lint site.yml tests/fixtures/doctl-install.yml
+        run: ansible-lint site.yml tests/fixtures/doctl-install.yml tests/fixtures/cloudflare-skills-install.yml
 
       - name: Check Ansible syntax
         run: |
           ansible-playbook --syntax-check -i 'localhost,' site.yml
           ansible-playbook --syntax-check -i 'localhost,' tests/fixtures/doctl-install.yml
+          ansible-playbook --syntax-check -i 'localhost,' tests/fixtures/cloudflare-skills-install.yml
 
       - name: Check shell syntax
         run: bash -n scripts/render-cloud-init.sh scripts/test-provisioning.sh scripts/verify.sh
@@ -39,7 +41,7 @@ jobs:
       - name: Lint shell scripts and shell templates
         run: |
           shellcheck scripts/render-cloud-init.sh scripts/test-provisioning.sh scripts/verify.sh
-          shellcheck templates/bibi-launcher.j2 templates/bibi-machine-update.j2 templates/bibi-motd.j2 templates/bibi-pi-extensions-update.j2
+          shellcheck templates/bibi-launcher.j2 templates/bibi-machine-update.j2 templates/bibi-motd.j2 templates/bibi-pi-extensions-update.j2 templates/bibi-pi-public-packages-update.j2
 
       - name: Exercise provisioning and verification fixtures
         run: scripts/test-provisioning.sh

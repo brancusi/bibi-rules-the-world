@@ -15,15 +15,33 @@ firstmate_ref: "673b6ad39d01183a19c5bd8a52675a2ee8ea06e6"
 node_major: 24
 nodesource_key_sha256: "b42e0321dabdc24e892115da705cf061167eac12a317f23d329862d0aa0a271d"
 
-# Exact npm pins observed on 2026-07-22. Deliberately update these in a PR.
-pi_version: "0.81.1"
+# Exact npm pins observed and source-reviewed on 2026-08-24. Deliberately
+# update these in a PR; moving npm tags are not provisioning inputs.
+pi_version: "0.83.0"
+wrangler_package: "wrangler@4.125.0"
 firecrawl_cli_package: "firecrawl-cli@1.19.27"
 axi_packages:
-  - "gh-axi@0.1.27"
+  - "gh-axi@0.1.30"
   - "chrome-devtools-axi@0.1.27"
-  - "lavish-axi@0.1.43"
-  - "tasks-axi@0.2.3"
-  - "quota-axi@0.1.11"
+  - "lavish-axi@0.1.50"
+  - "tasks-axi@0.2.5"
+  - "quota-axi@0.1.29"
+
+# Public Pi packages are reconciled through Pi's official package installer as
+# the daily user. Exact npm versions are retained in Pi settings.
+pi_public_packages:
+  - "npm:@tmustier/pi-files-widget@0.2.0"
+  - "npm:pi-web-access@0.24.0"
+
+# Official Cloudflare agent skills reviewed at this verified upstream commit.
+# Only these two skills are linked into Pi; the source checkout remains pinned.
+cloudflare_skills_repo_url: "https://github.com/cloudflare/skills.git"
+cloudflare_skills_ref: "f96bff754e428838818017f75817f0f9428acd48"
+cloudflare_skills_checkout: "{{ bibi_agent_home }}/.local/share/bibi/cloudflare-skills"
+cloudflare_skill_link_dir: "{{ bibi_agent_home }}/.pi/agent/skills"
+cloudflare_skill_names:
+  - "cloudflare"
+  - "wrangler"
 
 # Official immutable release artifacts reviewed on 2026-08-01. The private
 # DigitalOcean Pi package requires doctl >=1.165.0 within the 1.x series.
@@ -44,12 +62,12 @@ doctl_archives:
 
 # This private collection is intentionally not fetched by cloud-init/Ansible.
 # After `gh auth login`, the daily user runs bibi-pi-extensions-update. The
-# merged collection at this commit requires Node.js 22+, Pi 0.81.1-compatible,
+# merged collection at this commit requires Node.js 22+, Pi 0.83.0-compatible,
 # official doctl 1.165.0+ (1.x), and the pi-ai, coding-agent, pi-tui, and
 # typebox core peers supplied by Pi.
 pi_extensions_repo_url: "https://github.com/brancusi/pi-extensions.git"
-pi_extensions_ref: "bdacbf815b64183855f174865a3f54272c9d0501"
-pi_extensions_package_version: "1.1.0"
+pi_extensions_ref: "c66061fd372ad36e4ffbf61c41fb92dd1d2d9152"
+pi_extensions_package_version: "1.5.0"
 
 no_mistakes_version: "1.40.0"
 no_mistakes_archives:

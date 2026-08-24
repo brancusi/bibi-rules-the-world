@@ -1,0 +1,33 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+read -r -a package_sources <<< "{{ pi_public_packages | join(' ') }}"
+settings_dir=${PI_CODING_AGENT_DIR:-"$HOME/.pi/agent"}
+settings_file="$settings_dir/settings.json"
+
+for package_source in "${package_sources[@]}"; do
+  package_spec=${package_source#npm:}
+  package_name=${package_spec%@*}
+  expected_version=${package_spec##*@}
+  package_json="$settings_dir/npm/node_modules/$package_name/package.json"
+  actual_version=$(jq -r '.version // empty' "$package_json" 2>/dev/null || true)
+
+  if [[ "$actual_version" == "$expected_version" && -r "$settings_file" ]] \
+    && jq -e --arg source "$package_source" \
+      'any((.packages // [])[]; (if type == "string" then . else .source end) == $source)' \
+      "$settings_file" >/dev/null 2>&1; then
+    printf 'ok          %s\n' "$package_source"
+    continue
+  fi
+
+  GIT_TERMINAL_PROMPT=0 NPM_CONFIG_IGNORE_SCRIPTS=true pi install "$package_source"
+  actual_version=$(jq -r '.version // empty' "$package_json" 2>/dev/null || true)
+  if [[ "$actual_version" != "$expected_version" ]] \
+    || ! jq -e --arg source "$package_source" \
+      'any((.packages // [])[]; (if type == "string" then . else .source end) == $source)' \
+      "$settings_file" >/dev/null 2>&1; then
+    printf 'failed to reconcile %s\n' "$package_source" >&2
+    exit 1
+  fi
+  printf 'reconciled  %s\n' "$package_source"
+done
