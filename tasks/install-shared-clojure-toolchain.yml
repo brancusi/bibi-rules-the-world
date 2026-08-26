@@ -1,0 +1,255 @@
+---
+- name: Select the pinned JDK release for this architecture
+  ansible.builtin.set_fact:
+    shared_jdk_release: "{{ jdk_archives[ansible_architecture] }}"
+    shared_jdk_archive: >-
+      OpenJDK21U-jdk_{{ jdk_archives[ansible_architecture].arch }}_linux_hotspot_{{ jdk_archive_version }}.tar.gz
+    shared_jdk_version_dir: "{{ shared_toolchain_root }}/jdk-{{ jdk_version }}"
+    shared_jdk_home: "{{ shared_toolchain_root }}/jdk-21"
+    shared_clojure_version_dir: "{{ shared_toolchain_root }}/clojure-{{ clojure_cli_version }}"
+    shared_clojure_home: "{{ shared_toolchain_root }}/clojure"
+
+- name: Create shared toolchain and artifact directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: "{{ shared_toolchain_owner }}"
+    group: "{{ shared_toolchain_group }}"
+    mode: "0755"
+  loop:
+    - "{{ shared_toolchain_root }}"
+    - "{{ shared_toolchain_cache_dir }}"
+
+- name: Download the checksum-pinned JDK
+  ansible.builtin.get_url:
+    url: "{{ jdk_release_base_url }}/jdk-{{ jdk_version | urlencode }}/{{ shared_jdk_archive }}"
+    dest: "{{ shared_toolchain_cache_dir }}/{{ shared_jdk_archive }}"
+    checksum: "sha256:{{ shared_jdk_release.sha256 }}"
+    owner: "{{ shared_toolchain_owner }}"
+    group: "{{ shared_toolchain_group }}"
+    mode: "0644"
+
+- name: Inspect the installed JDK version
+  ansible.builtin.command:
+    argv:
+      - "{{ shared_jdk_version_dir }}/bin/java"
+      - -fullversion
+  register: shared_jdk_probe
+  changed_when: false
+  failed_when: false
+
+- name: Decide whether the JDK needs repair
+  ansible.builtin.set_fact:
+    shared_jdk_needs_repair: >-
+      {{ shared_jdk_probe.rc != 0
+         or (shared_jdk_probe.stdout | length > 0)
+         or shared_jdk_probe.stderr != ('openjdk full version "' ~ jdk_runtime_version ~ '"') }}
+
+- name: Remove a missing or mismatched JDK installation
+  ansible.builtin.file:
+    path: "{{ shared_jdk_version_dir }}"
+    state: absent
+  when: shared_jdk_needs_repair
+
+- name: Create the pinned JDK installation directory
+  ansible.builtin.file:
+    path: "{{ shared_jdk_version_dir }}"
+    state: directory
+    owner: "{{ shared_toolchain_owner }}"
+    group: "{{ shared_toolchain_group }}"
+    mode: "0755"
+  when: shared_jdk_needs_repair
+
+- name: Install the pinned JDK archive
+  ansible.builtin.unarchive:
+    src: "{{ shared_toolchain_cache_dir }}/{{ shared_jdk_archive }}"
+    dest: "{{ shared_jdk_version_dir }}"
+    remote_src: true
+    extra_opts:
+      - --strip-components=1
+    owner: "{{ shared_toolchain_owner }}"
+    group: "{{ shared_toolchain_group }}"
+  when: shared_jdk_needs_repair
+
+- name: Verify the installed JDK release exactly
+  ansible.builtin.command:
+    argv:
+      - "{{ shared_jdk_version_dir }}/bin/java"
+      - -fullversion
+  register: shared_jdk_verified
+  changed_when: false
+  failed_when: >-
+    shared_jdk_verified.rc != 0
+    or (shared_jdk_verified.stdout | length > 0)
+    or shared_jdk_verified.stderr != ('openjdk full version "' ~ jdk_runtime_version ~ '"')
+
+- name: Activate the stable shared JDK home
+  ansible.builtin.file:
+    src: "{{ shared_jdk_version_dir }}"
+    dest: "{{ shared_jdk_home }}"
+    state: link
+    force: true
+    owner: "{{ shared_toolchain_owner }}"
+    group: "{{ shared_toolchain_group }}"
+
+- name: Download the checksum-pinned Clojure CLI
+  ansible.builtin.get_url:
+    url: "{{ clojure_cli_release_base_url }}/clojure-tools-{{ clojure_cli_version }}.tar.gz"
+    dest: "{{ shared_toolchain_cache_dir }}/clojure-tools-{{ clojure_cli_version }}.tar.gz"
+    checksum: "sha256:{{ clojure_cli_sha256 }}"
+    owner: "{{ shared_toolchain_owner }}"
+    group: "{{ shared_toolchain_group }}"
+    mode: "0644"
+
+- name: Inspect the installed Clojure CLI version
+  ansible.builtin.command:
+    argv:
+      - "{{ shared_clojure_version_dir }}/bin/clojure"
+      - --version
+  register: shared_clojure_probe
+  changed_when: false
+  failed_when: false
+
+- name: Decide whether Clojure CLI needs repair
+  ansible.builtin.set_fact:
+    shared_clojure_needs_repair: >-
+      {{ shared_clojure_probe.rc != 0
+         or shared_clojure_probe.stdout != ('Clojure CLI version ' ~ clojure_cli_version) }}
+
+- name: Remove a missing or mismatched Clojure CLI installation
+  ansible.builtin.file:
+    path: "{{ shared_clojure_version_dir }}"
+    state: absent
+  when: shared_clojure_needs_repair
+
+- name: Create the pinned Clojure CLI installation directory
+  ansible.builtin.file:
+    path: "{{ shared_clojure_version_dir }}"
+    state: directory
+    owner: "{{ shared_toolchain_owner }}"
+    group: "{{ shared_toolchain_group }}"
+    mode: "0755"
+  when: shared_clojure_needs_repair
+
+- name: Extract the pinned Clojure CLI archive
+  ansible.builtin.unarchive:
+    src: "{{ shared_toolchain_cache_dir }}/clojure-tools-{{ clojure_cli_version }}.tar.gz"
+    dest: "{{ shared_clojure_version_dir }}"
+    remote_src: true
+    extra_opts:
+      - --strip-components=1
+    owner: "{{ shared_toolchain_owner }}"
+    group: "{{ shared_toolchain_group }}"
+  when: shared_clojure_needs_repair
+
+- name: Set the shared Clojure installation directory
+  ansible.builtin.replace:
+    path: "{{ shared_clojure_version_dir }}/clojure"
+    regexp: PREFIX
+    replace: "{{ shared_clojure_version_dir }}"
+  when: shared_clojure_needs_repair
+
+- name: Set the shared clj executable directory
+  ansible.builtin.replace:
+    path: "{{ shared_clojure_version_dir }}/clj"
+    regexp: BINDIR
+    replace: "{{ shared_clojure_version_dir }}/bin"
+  when: shared_clojure_needs_repair
+
+- name: Create the shared Clojure executable directory
+  ansible.builtin.file:
+    path: "{{ shared_clojure_version_dir }}/bin"
+    state: directory
+    owner: "{{ shared_toolchain_owner }}"
+    group: "{{ shared_toolchain_group }}"
+    mode: "0755"
+  when: shared_clojure_needs_repair
+
+- name: Install the shared Clojure executables
+  ansible.builtin.copy:
+    src: "{{ shared_clojure_version_dir }}/{{ item }}"
+    dest: "{{ shared_clojure_version_dir }}/bin/{{ item }}"
+    remote_src: true
+    owner: "{{ shared_toolchain_owner }}"
+    group: "{{ shared_toolchain_group }}"
+    mode: "0755"
+  loop:
+    - clojure
+    - clj
+  when: shared_clojure_needs_repair
+
+- name: Create the shared Clojure library directory
+  ansible.builtin.file:
+    path: "{{ shared_clojure_version_dir }}/libexec"
+    state: directory
+    owner: "{{ shared_toolchain_owner }}"
+    group: "{{ shared_toolchain_group }}"
+    mode: "0755"
+  when: shared_clojure_needs_repair
+
+- name: Install the shared Clojure libraries
+  ansible.builtin.copy:
+    src: "{{ item }}"
+    dest: "{{ shared_clojure_version_dir }}/libexec/{{ item | basename }}"
+    remote_src: true
+    owner: "{{ shared_toolchain_owner }}"
+    group: "{{ shared_toolchain_group }}"
+    mode: "0644"
+  with_fileglob:
+    - "{{ shared_clojure_version_dir }}/*.jar"
+  when: shared_clojure_needs_repair
+
+- name: Verify the installed Clojure CLI release exactly
+  ansible.builtin.command:
+    argv:
+      - "{{ shared_clojure_version_dir }}/bin/clojure"
+      - --version
+  register: shared_clojure_verified
+  changed_when: false
+  failed_when: >-
+    shared_clojure_verified.rc != 0
+    or shared_clojure_verified.stdout != ('Clojure CLI version ' ~ clojure_cli_version)
+
+- name: Activate the stable shared Clojure home
+  ansible.builtin.file:
+    src: "{{ shared_clojure_version_dir }}"
+    dest: "{{ shared_clojure_home }}"
+    state: link
+    force: true
+    owner: "{{ shared_toolchain_owner }}"
+    group: "{{ shared_toolchain_group }}"
+
+- name: Expose shared toolchain commands to noninteractive workers
+  ansible.builtin.file:
+    src: "{{ item.src }}"
+    dest: "{{ shared_toolchain_bin_dir }}/{{ item.dest }}"
+    state: link
+    force: true
+    owner: "{{ shared_toolchain_owner }}"
+    group: "{{ shared_toolchain_group }}"
+  loop:
+    - {src: "{{ shared_jdk_home }}/bin/java", dest: java}
+    - {src: "{{ shared_jdk_home }}/bin/javac", dest: javac}
+    - {src: "{{ shared_jdk_home }}/bin/jar", dest: jar}
+    - {src: "{{ shared_clojure_home }}/bin/clojure", dest: clojure}
+    - {src: "{{ shared_clojure_home }}/bin/clj", dest: clj}
+
+- name: Expose the shared toolchain to fresh login shells
+  ansible.builtin.copy:
+    dest: "{{ shared_toolchain_profile_path }}"
+    owner: "{{ shared_toolchain_owner }}"
+    group: "{{ shared_toolchain_group }}"
+    mode: "0644"
+    content: |
+      # Managed by bibi-rules-the-world.
+      export JAVA_HOME="{{ shared_jdk_home }}"
+      bibi_path_prepend() {
+        case ":${PATH}:" in
+          *":$1:"*) ;;
+          *) PATH="$1:${PATH}" ;;
+        esac
+      }
+      bibi_path_prepend "{{ shared_clojure_home }}/bin"
+      bibi_path_prepend "${JAVA_HOME}/bin"
+      unset -f bibi_path_prepend
+      export PATH
