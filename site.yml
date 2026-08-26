@@ -18,6 +18,7 @@
         that:
           - ansible_architecture in no_mistakes_archives
           - ansible_architecture in doctl_archives
+          - ansible_architecture in jdk_archives
         fail_msg: "Supported architectures are x86_64 and aarch64."
 
   tasks:
@@ -39,6 +40,7 @@
           - python3
           - python3-pip
           - ripgrep
+          - rlwrap
           - shellcheck
           - unattended-upgrades
           - unzip
@@ -179,6 +181,9 @@
         name: fail2ban
         enabled: true
         state: started
+
+    - name: Install and verify the shared JDK and Clojure CLI
+      ansible.builtin.include_tasks: tasks/install-shared-clojure-toolchain.yml
 
     - name: Install and verify the pinned official doctl release
       ansible.builtin.include_tasks: tasks/install-doctl.yml

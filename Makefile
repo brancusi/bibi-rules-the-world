@@ -11,13 +11,15 @@ YAMLLINT_CONFIG := {extends: default, rules: {line-length: {max: 160}, document-
 lint: yaml ansible shell test
 
 yaml:
-	yamllint -d '$(YAMLLINT_CONFIG)' cloud-init.yaml group_vars/all.yml site.yml tasks/install-doctl.yml tasks/install-cloudflare-skills.yml tests/fixtures/doctl-install.yml tests/fixtures/cloudflare-skills-install.yml
+	yamllint -d '$(YAMLLINT_CONFIG)' cloud-init.yaml group_vars/all.yml site.yml shared-clojure-toolchain.yml tasks/install-doctl.yml tasks/install-cloudflare-skills.yml tasks/install-shared-clojure-toolchain.yml tests/fixtures/doctl-install.yml tests/fixtures/cloudflare-skills-install.yml tests/fixtures/shared-clojure-toolchain-install.yml
 
 ansible:
-	ansible-lint site.yml tests/fixtures/doctl-install.yml tests/fixtures/cloudflare-skills-install.yml
+	ansible-lint site.yml shared-clojure-toolchain.yml tests/fixtures/doctl-install.yml tests/fixtures/cloudflare-skills-install.yml tests/fixtures/shared-clojure-toolchain-install.yml
 	ansible-playbook --syntax-check -i 'localhost,' site.yml
+	ansible-playbook --syntax-check -i 'localhost,' shared-clojure-toolchain.yml
 	ansible-playbook --syntax-check -i 'localhost,' tests/fixtures/doctl-install.yml
 	ansible-playbook --syntax-check -i 'localhost,' tests/fixtures/cloudflare-skills-install.yml
+	ansible-playbook --syntax-check -i 'localhost,' tests/fixtures/shared-clojure-toolchain-install.yml
 
 shell:
 	bash -n scripts/render-cloud-init.sh scripts/test-provisioning.sh scripts/verify.sh

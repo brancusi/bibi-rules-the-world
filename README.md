@@ -15,6 +15,7 @@ Pi, Herdr, FirstMate, source code, builds, and credentials stay on the Droplet.
 - Herdr as the persistent FirstMate backend
 - FirstMate pinned to a reviewed Git commit
 - checksum-pinned Herdr, Treehouse, no-mistakes, and official `doctl` binaries
+- a checksum-pinned Temurin JDK 21 and Clojure CLI in `/opt/bibi/toolchains`
 - exact npm pins for Pi, Wrangler 4.x, Firecrawl CLI, and the required AXI tools
 - exact public Pi package pins plus the reviewed official `cloudflare/skills`
   `cloudflare` and `wrangler` skills
@@ -113,7 +114,10 @@ Provisioning downloads and verifies several tools and can take a few minutes.
 The official DigitalOcean CLI is selected for the machine architecture, checked
 against the reviewed release archive SHA-256, required to report the pinned
 version, and installed as root-owned mode `0555` at `/usr/local/bin/doctl`.
-Wrangler and the other global npm CLIs are exact version pins installed without
+The architecture-specific JDK and architecture-independent Clojure CLI are also
+checksum-pinned. Stable links and a managed login profile expose only their
+shared `/opt/bibi/toolchains` homes; no project checkout supplies Java or
+Clojure. Wrangler and the other global npm CLIs are exact version pins installed without
 package lifecycle scripts. Public Pi packages are reconciled through Pi's own
 package installer with npm lifecycle scripts disabled. The official Cloudflare
 skill repository is checked out at a
@@ -233,13 +237,16 @@ the PTY session alive when WezTerm closes or SSH disconnects. Reconnect with
 
 ## Verify the installation
 
-As the daily user, verify command availability, exact global npm CLI versions,
-pinned public Pi packages, the official Cloudflare skill source and links, the
-exact doctl version and root ownership/mode, FirstMate configuration, sudo
-separation, and (when installed) the private collection commit/package version:
+As the daily user, verify the shared JDK 21/Clojure CLI resolution, command
+availability, exact global npm CLI versions, pinned public Pi packages, the
+official Cloudflare skill source and links, the exact doctl version and root
+ownership/mode, FirstMate configuration, sudo separation, and (when installed)
+the private collection commit/package version. This clean login-shell check is
+the authoritative verification command:
 
 ```bash
-bibi-verify
+env -i HOME="$HOME" USER="$USER" LOGNAME="$LOGNAME" SHELL=/bin/bash \
+  /bin/bash --login -c 'bibi-verify'
 ```
 
 Before the interactive GitHub step, the private collection is reported as
@@ -259,6 +266,14 @@ cat /etc/bibi-provisioned-versions
    Extensions, review and replace the full commit ref; never provision a moving
    branch.
 2. Run `make lint` locally, review, and push the change.
+
+For a reviewed JDK/Clojure-only repair, the maintenance identity can apply the
+narrow playbook without reconciling unrelated host state:
+
+```bash
+sudo ansible-playbook -i 'localhost,' shared-clojure-toolchain.yml
+```
+
 3. After the reviewed change lands, enter through the maintenance identity and
    reconcile public/system state:
 
@@ -302,8 +317,8 @@ development servers.
 
 The rebuild boundary is deliberate:
 
-- public infrastructure, doctl, exact npm CLIs, public Pi packages, and the
-  pinned official Cloudflare skills come from this repo
+- public infrastructure, the shared JDK/Clojure toolchain, doctl, exact npm
+  CLIs, public Pi packages, and the pinned official Cloudflare skills come from this repo
 - unauthenticated cloud-init never fetches `brancusi/pi-extensions`
 - after `gh auth login`, `bibi-pi-extensions-update` restores its exact reviewed pin
 - `/digitalocean-login hey-coach` restores the named doctl context interactively

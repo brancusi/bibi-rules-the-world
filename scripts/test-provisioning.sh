@@ -163,6 +163,141 @@ rm -rf "$pi_update_home/.pi/agent/npm/node_modules/pi-web-access"
 env "${pi_update_env[@]}" "$tmp_dir/pi-public-update" >"$tmp_dir/pi-update-repair.log"
 [[ $(wc -l <"$tmp_dir/pi-install-calls") == 3 ]] || fail "missing Pi package content was not repaired"
 
+# Exercise clean install, mismatch repair, and idempotency for the production
+# shared JDK/Clojure tasks with small local release fixtures.
+toolchain_release_dir="$tmp_dir/toolchain-releases"
+toolchain_state="$tmp_dir/toolchain-state"
+toolchain_jdk_staging="$tmp_dir/toolchain-jdk-staging/jdk-fixture"
+toolchain_clojure_staging="$tmp_dir/toolchain-clojure-staging/clojure-tools"
+mkdir -p "$toolchain_release_dir/jdk-21.0.12+8" "$toolchain_jdk_staging/bin" \
+  "$toolchain_clojure_staging" "$toolchain_state/bin"
+cat >"$toolchain_jdk_staging/bin/java" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+executable=$(readlink -f "$0")
+home=$(cd "$(dirname "$executable")/.." && pwd)
+version=$(<"$home/release-version")
+if [[ ${1:-} == -fullversion ]]; then
+  printf 'openjdk full version "%s"\n' "$version" >&2
+  exit 0
+fi
+printf 'fixture java %s\n' "$version"
+EOF
+for command_name in javac jar; do
+  cat >"$toolchain_jdk_staging/bin/$command_name" <<EOF
+#!/usr/bin/env bash
+printf 'fixture ${command_name}\\n'
+EOF
+  chmod 0755 "$toolchain_jdk_staging/bin/$command_name"
+done
+chmod 0755 "$toolchain_jdk_staging/bin/java"
+printf '21.0.12+8-LTS\n' >"$toolchain_jdk_staging/release-version"
+for arch in x64 aarch64; do
+  tar -czf "$toolchain_release_dir/jdk-21.0.12+8/OpenJDK21U-jdk_${arch}_linux_hotspot_21.0.12_8.tar.gz" \
+    -C "$(dirname "$toolchain_jdk_staging")" jdk-fixture
+done
+cat >"$toolchain_clojure_staging/clojure" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+install_dir=PREFIX
+version=1.12.4.1618
+if [[ ${1:-} == --version ]]; then
+  printf 'Clojure CLI version %s\n' "$version"
+  exit 0
+fi
+exec "$JAVA_HOME/bin/java" "$@"
+EOF
+cat >"$toolchain_clojure_staging/clj" <<'EOF'
+#!/usr/bin/env bash
+bin_dir=BINDIR
+exec "$bin_dir/clojure" "$@"
+EOF
+chmod 0755 "$toolchain_clojure_staging/clojure" "$toolchain_clojure_staging/clj"
+printf 'fixture\n' >"$toolchain_clojure_staging/deps.edn"
+printf 'fixture\n' >"$toolchain_clojure_staging/clojure-tools-1.12.4.1618.jar"
+tar -czf "$toolchain_release_dir/clojure-tools-1.12.4.1618.tar.gz" \
+  -C "$(dirname "$toolchain_clojure_staging")" clojure-tools
+fixture_jdk_x64_sha=$(sha256sum "$toolchain_release_dir/jdk-21.0.12+8/OpenJDK21U-jdk_x64_linux_hotspot_21.0.12_8.tar.gz" | awk '{print $1}')
+fixture_jdk_arm64_sha=$(sha256sum "$toolchain_release_dir/jdk-21.0.12+8/OpenJDK21U-jdk_aarch64_linux_hotspot_21.0.12_8.tar.gz" | awk '{print $1}')
+fixture_clojure_sha=$(sha256sum "$toolchain_release_dir/clojure-tools-1.12.4.1618.tar.gz" | awk '{print $1}')
+cat >"$tmp_dir/toolchain-vars.yml" <<EOF
+---
+shared_toolchain_root: "$toolchain_state/opt"
+shared_toolchain_cache_dir: "$toolchain_state/cache"
+shared_toolchain_bin_dir: "$toolchain_state/bin"
+shared_toolchain_profile_path: "$toolchain_state/profile.sh"
+shared_toolchain_owner: "$(id -un)"
+shared_toolchain_group: "$(id -gn)"
+jdk_version: "21.0.12+8"
+jdk_runtime_version: "21.0.12+8-LTS"
+jdk_archive_version: "21.0.12_8"
+jdk_release_base_url: "file://$toolchain_release_dir"
+jdk_archives:
+  x86_64:
+    arch: x64
+    sha256: "$fixture_jdk_x64_sha"
+  aarch64:
+    arch: aarch64
+    sha256: "$fixture_jdk_arm64_sha"
+clojure_cli_version: "1.12.4.1618"
+clojure_cli_release_base_url: "file://$toolchain_release_dir"
+clojure_cli_sha256: "$fixture_clojure_sha"
+EOF
+run_toolchain_installer() {
+  local output=$1
+  ansible-playbook --inventory 'localhost,' \
+    "$root_dir/tests/fixtures/shared-clojure-toolchain-install.yml" \
+    --extra-vars "@$tmp_dir/toolchain-vars.yml" \
+    --extra-vars 'ansible_architecture=x86_64' >"$output" 2>&1
+}
+run_toolchain_installer "$tmp_dir/toolchain-first.log"
+java_stdout=$("$toolchain_state/bin/java" -fullversion 2>"$tmp_dir/java-fullversion.stderr")
+[[ -z "$java_stdout" ]] || fail "fixture java -fullversion unexpectedly wrote to stdout"
+[[ $(<"$tmp_dir/java-fullversion.stderr") == 'openjdk full version "21.0.12+8-LTS"' ]] \
+  || fail "stderr-only Temurin JDK full version was not accepted exactly"
+[[ $("$toolchain_state/bin/clojure" --version) == 'Clojure CLI version 1.12.4.1618' ]] \
+  || fail "clean shared Clojure CLI installation has the wrong version"
+[[ $(readlink -f "$toolchain_state/bin/java") == "$toolchain_state/opt/jdk-21.0.12+8/bin/java" ]] \
+  || fail "java does not resolve into the shared host-managed root"
+[[ $(readlink -f "$toolchain_state/bin/clojure") == "$toolchain_state/opt/clojure-1.12.4.1618/bin/clojure" ]] \
+  || fail "clojure does not resolve into the shared host-managed root"
+printf '17.0.1+1\n' >"$toolchain_state/opt/jdk-21.0.12+8/release-version"
+python3 - "$toolchain_state/opt/clojure-1.12.4.1618/bin/clojure" <<'PY'
+import pathlib
+import sys
+
+path = pathlib.Path(sys.argv[1])
+path.write_text(path.read_text().replace("version=1.12.4.1618", "version=1.11.1.1"))
+PY
+run_toolchain_installer "$tmp_dir/toolchain-repair.log"
+[[ $("$toolchain_state/bin/java" -fullversion 2>&1) == 'openjdk full version "21.0.12+8-LTS"' ]] \
+  || fail "shared JDK version mismatch was not repaired"
+[[ $("$toolchain_state/bin/clojure" --version) == 'Clojure CLI version 1.12.4.1618' ]] \
+  || fail "shared Clojure CLI version mismatch was not repaired"
+run_toolchain_installer "$tmp_dir/toolchain-idempotent.log"
+grep -Eq 'changed=0([[:space:]]|$)' "$tmp_dir/toolchain-idempotent.log" \
+  || fail "second ready shared toolchain reconciliation was not idempotent"
+cat >"$toolchain_state/versions" <<EOF
+shared_toolchain_root=$toolchain_state/opt
+jdk_version=21.0.12+8
+jdk_runtime_version=21.0.12+8-LTS
+jdk_home=$toolchain_state/opt/jdk-21
+clojure_cli_version=1.12.4.1618
+clojure_home=$toolchain_state/opt/clojure
+EOF
+env -i HOME="$tmp_dir/clean-home" PATH="$toolchain_state/bin:/usr/bin:/bin" \
+  BIBI_VERIFY_TOOLCHAIN_ONLY=1 BIBI_VERIFY_ALLOW_TEST_ROOT=1 \
+  BIBI_VERSIONS_FILE="$toolchain_state/versions" PROFILE="$toolchain_state/profile.sh" \
+  VERIFY="$root_dir/scripts/verify.sh" \
+  /bin/bash --noprofile --norc -c ". \"\$PROFILE\"; \"\$VERIFY\"" >"$tmp_dir/toolchain-verify.log"
+
+# Toolchain policy and tests must never acquire a project-local fallback.
+if git -C "$root_dir" grep -Ein 'study[-_ ]walk|\.treehouse' -- \
+  group_vars/all.yml site.yml shared-clojure-toolchain.yml \
+  tasks/install-shared-clojure-toolchain.yml templates/provisioned-versions.j2 README.md; then
+  fail "shared toolchain provisioning contains a project-local reference"
+fi
+
 # Build hermetic architecture-specific release archives and exercise the same
 # production Ansible task file used by site.yml.
 release_dir="$tmp_dir/releases"
