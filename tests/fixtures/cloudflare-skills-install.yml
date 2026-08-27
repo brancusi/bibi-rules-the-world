@@ -1,0 +1,9 @@
+---
+- name: Exercise the official Cloudflare skill installer
+  hosts: all
+  connection: local
+  gather_facts: false
+
+  tasks:
+    - name: Install the pinned Cloudflare skills
+      ansible.builtin.include_tasks: ../../tasks/install-cloudflare-skills.yml

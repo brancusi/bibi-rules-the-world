@@ -1,0 +1,98 @@
+---
+- name: Ensure the managed Cloudflare skill checkout parent exists
+  become: "{{ cloudflare_skills_become | default(true) }}"
+  become_user: "{{ cloudflare_skills_owner }}"
+  ansible.builtin.file:
+    path: "{{ cloudflare_skills_checkout | dirname }}"
+    state: directory
+    mode: "0755"
+
+- name: Check out the reviewed official Cloudflare skills commit
+  become: "{{ cloudflare_skills_become | default(true) }}"
+  become_user: "{{ cloudflare_skills_owner }}"
+  ansible.builtin.git:
+    repo: "{{ cloudflare_skills_repo_url }}"
+    dest: "{{ cloudflare_skills_checkout }}"
+    version: "{{ cloudflare_skills_ref }}"
+    update: true
+    force: true
+
+- name: Remove untracked files from the managed Cloudflare skills
+  become: "{{ cloudflare_skills_become | default(true) }}"
+  become_user: "{{ cloudflare_skills_owner }}"
+  ansible.builtin.command:
+    argv:
+      - git
+      - -C
+      - "{{ cloudflare_skills_checkout }}"
+      - clean
+      - -dffx
+      - --
+      - skills/cloudflare
+      - skills/wrangler
+  register: cloudflare_skills_clean
+  changed_when: cloudflare_skills_clean.stdout | length > 0
+
+- name: Ensure Pi's global skill directory exists
+  become: "{{ cloudflare_skills_become | default(true) }}"
+  become_user: "{{ cloudflare_skills_owner }}"
+  ansible.builtin.file:
+    path: "{{ cloudflare_skill_link_dir }}"
+    state: directory
+    mode: "0755"
+
+- name: Inspect existing Cloudflare skill paths
+  become: "{{ cloudflare_skills_become | default(true) }}"
+  become_user: "{{ cloudflare_skills_owner }}"
+  ansible.builtin.stat:
+    path: "{{ cloudflare_skill_link_dir }}/{{ item }}"
+    follow: false
+  loop: "{{ cloudflare_skill_names }}"
+  register: cloudflare_skill_paths
+
+- name: Remove unmanaged copies of the Cloudflare skills
+  become: "{{ cloudflare_skills_become | default(true) }}"
+  become_user: "{{ cloudflare_skills_owner }}"
+  ansible.builtin.file:
+    path: "{{ item.stat.path }}"
+    state: absent
+  loop: "{{ cloudflare_skill_paths.results }}"
+  when:
+    - item.stat.exists
+    - not (item.stat.islnk | default(false))
+
+- name: Link the reviewed Cloudflare skills into Pi
+  become: "{{ cloudflare_skills_become | default(true) }}"
+  become_user: "{{ cloudflare_skills_owner }}"
+  ansible.builtin.file:
+    src: "{{ cloudflare_skills_checkout }}/skills/{{ item }}"
+    dest: "{{ cloudflare_skill_link_dir }}/{{ item }}"
+    state: link
+    force: true
+    follow: false
+  loop: "{{ cloudflare_skill_names }}"
+
+- name: Verify the Cloudflare skill checkout commit
+  become: "{{ cloudflare_skills_become | default(true) }}"
+  become_user: "{{ cloudflare_skills_owner }}"
+  ansible.builtin.command:
+    argv:
+      - git
+      - -C
+      - "{{ cloudflare_skills_checkout }}"
+      - rev-parse
+      - HEAD
+  register: cloudflare_skills_head
+  changed_when: false
+  failed_when: cloudflare_skills_head.stdout != cloudflare_skills_ref
+
+- name: Verify the linked Cloudflare skill manifests
+  become: "{{ cloudflare_skills_become | default(true) }}"
+  become_user: "{{ cloudflare_skills_owner }}"
+  ansible.builtin.command:
+    argv:
+      - test
+      - -r
+      - "{{ cloudflare_skill_link_dir }}/{{ item }}/SKILL.md"
+  loop: "{{ cloudflare_skill_names }}"
+  changed_when: false

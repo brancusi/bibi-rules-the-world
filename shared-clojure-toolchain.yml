@@ -1,0 +1,27 @@
+---
+- name: Reconcile Bibi's shared JDK and Clojure CLI
+  hosts: all
+  connection: local
+  become: true
+  gather_facts: true
+
+  vars_files:
+    - group_vars/all.yml
+
+  pre_tasks:
+    - name: Refuse unsupported operating systems
+      ansible.builtin.assert:
+        that:
+          - ansible_distribution == "Ubuntu"
+          - ansible_distribution_version is version('24.04', '>=')
+        fail_msg: "This playbook targets Ubuntu 24.04 LTS or newer."
+
+    - name: Refuse unsupported CPU architectures
+      ansible.builtin.assert:
+        that:
+          - ansible_architecture in jdk_archives
+        fail_msg: "Supported architectures are x86_64 and aarch64."
+
+  tasks:
+    - name: Install and verify the shared JDK and Clojure CLI
+      ansible.builtin.include_tasks: tasks/install-shared-clojure-toolchain.yml

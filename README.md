@@ -15,7 +15,10 @@ Pi, Herdr, FirstMate, source code, builds, and credentials stay on the Droplet.
 - Herdr as the persistent FirstMate backend
 - FirstMate pinned to a reviewed Git commit
 - checksum-pinned Herdr, Treehouse, no-mistakes, and official `doctl` binaries
-- exact npm pins for Pi, Firecrawl CLI, and the required AXI tools
+- a checksum-pinned Temurin JDK 21 and Clojure CLI in `/opt/bibi/toolchains`
+- exact npm pins for Pi, Wrangler 4.x, Firecrawl CLI, and the required AXI tools
+- exact public Pi package pins plus the reviewed official `cloudflare/skills`
+  `cloudflare` and `wrangler` skills
 - a reviewed commit pin and daily-user installer for the private Pi Extensions collection
 - SSH key authentication only, no root SSH, no agent forwarding
 - the DigitalOcean bootstrap key is removed from root after it is copied to
@@ -111,8 +114,17 @@ Provisioning downloads and verifies several tools and can take a few minutes.
 The official DigitalOcean CLI is selected for the machine architecture, checked
 against the reviewed release archive SHA-256, required to report the pinned
 version, and installed as root-owned mode `0555` at `/usr/local/bin/doctl`.
-Provisioning does **not** authenticate doctl or fetch the private Pi Extensions
-repository. Do not interrupt provisioning midway.
+The architecture-specific JDK and architecture-independent Clojure CLI are also
+checksum-pinned. Stable links and a managed login profile expose only their
+shared `/opt/bibi/toolchains` homes; no project checkout supplies Java or
+Clojure. Wrangler and the other global npm CLIs are exact version pins installed without
+package lifecycle scripts. Public Pi packages are reconciled through Pi's own
+package installer with npm lifecycle scripts disabled. The official Cloudflare
+skill repository is checked out at a
+reviewed commit, and only its `cloudflare` and `wrangler` skills are linked into
+the daily user's Pi skill directory. Provisioning does **not** authenticate
+Cloudflare or doctl, and it does not fetch the private Pi Extensions repository.
+Do not interrupt provisioning midway.
 
 ## 5. Configure plain SSH for WezTerm
 
@@ -158,6 +170,8 @@ First authenticate GitHub, then install the reviewed private collection pin:
 ```bash
 gh auth login
 bibi-pi-extensions-update
+wrangler login
+wrangler whoami
 firecrawl login --browser
 firecrawl --status
 pi
@@ -168,6 +182,10 @@ GitHub CLI's credential helper, and invokes Pi's official Git package installer
 against the exact reviewed commit over HTTPS. It disables terminal credential
 prompts, never copies or forwards a GitHub token, and is safe to rerun to
 reconcile the checkout. The private repository is not fetched until this step.
+The public Pi packages and official Cloudflare skills were already restored by
+Ansible and require no GitHub authentication. `wrangler login` creates local
+OAuth state; that generated account file is deliberately not provisioned or
+stored in this repository.
 
 Inside Pi, use `/login` for your model provider. Then create and accept a named
 DigitalOcean context through the extension's masked local UI:
@@ -180,10 +198,10 @@ Enter a newly created least-privilege DigitalOcean API token only in that masked
 prompt and confirm the displayed account/team identity. Never paste the token
 into chat, a shell command, Pi settings, Git, or this repository. Provisioning
 never runs `doctl auth`, creates a context, or contains a DigitalOcean/GitHub
-token. The extension requires Node.js 22+, Pi 0.81.1-compatible
+token. The extension requires Node.js 22+, Pi 0.83.0-compatible
 `pi-ai`, `coding-agent`, `pi-tui`, and `typebox` core peers, plus official
 doctl 1.165.0+ in the 1.x series. Pi supplies those peers; this repo pins
-compatible Pi 0.81.1 and doctl 1.166.0.
+compatible Pi 0.83.0 and doctl 1.166.0.
 
 If you prefer non-interactive Firecrawl setup, set `FIRECRAWL_API_KEY` in the
 remote VM environment instead of running `firecrawl login --browser`. Firecrawl
@@ -219,12 +237,16 @@ the PTY session alive when WezTerm closes or SSH disconnects. Reconnect with
 
 ## Verify the installation
 
-As the daily user, verify command availability, the exact doctl version and
-root ownership/mode, FirstMate configuration, sudo separation, and (when
-installed) the private collection commit/package version:
+As the daily user, verify the shared JDK 21/Clojure CLI resolution, command
+availability, exact global npm CLI versions, pinned public Pi packages, the
+official Cloudflare skill source and links, the exact doctl version and root
+ownership/mode, FirstMate configuration, sudo separation, and (when installed)
+the private collection commit/package version. This clean login-shell check is
+the authoritative verification command:
 
 ```bash
-bibi-verify
+env -i HOME="$HOME" USER="$USER" LOGNAME="$LOGNAME" SHELL=/bin/bash \
+  /bin/bash --login -c 'bibi-verify'
 ```
 
 Before the interactive GitHub step, the private collection is reported as
@@ -239,9 +261,19 @@ cat /etc/bibi-provisioned-versions
 ## Update or reconcile the VM
 
 1. Change pins or tasks in this repository. For doctl, review both declared
-   architectures and replace both archive checksums. For Pi Extensions, review
-   and replace `pi_extensions_ref`; never use a moving branch as the package pin.
+   architectures and replace both archive checksums. Review exact npm and public
+   Pi package versions before changing them. For Cloudflare skills or Pi
+   Extensions, review and replace the full commit ref; never provision a moving
+   branch.
 2. Run `make lint` locally, review, and push the change.
+
+For a reviewed JDK/Clojure-only repair, the maintenance identity can apply the
+narrow playbook without reconciling unrelated host state:
+
+```bash
+sudo ansible-playbook -i 'localhost,' shared-clojure-toolchain.yml
+```
+
 3. After the reviewed change lands, enter through the maintenance identity and
    reconcile public/system state:
 
@@ -249,6 +281,9 @@ cat /etc/bibi-provisioned-versions
 ssh bibi-admin
 sudo /usr/local/sbin/bibi-machine-update
 ```
+
+The machine update automatically reconciles Wrangler, public Pi packages, and
+the official Cloudflare skill checkout for `bibi` without touching credentials.
 
 4. Return as `bibi`. If the private collection pin changed—or merely to repair
    its checkout—rerun the authentication-gated daily-user reconciliation:
@@ -282,12 +317,13 @@ development servers.
 
 The rebuild boundary is deliberate:
 
-- public infrastructure, doctl, and other system/user tools come from this repo
+- public infrastructure, the shared JDK/Clojure toolchain, doctl, exact npm
+  CLIs, public Pi packages, and the pinned official Cloudflare skills come from this repo
 - unauthenticated cloud-init never fetches `brancusi/pi-extensions`
 - after `gh auth login`, `bibi-pi-extensions-update` restores its exact reviewed pin
 - `/digitalocean-login hey-coach` restores the named doctl context interactively
-- GitHub, DigitalOcean, Firecrawl, and Pi credentials are never restored from
-  user-data or this repository
+- GitHub, Cloudflare, DigitalOcean, Firecrawl, and Pi credentials are never
+  restored from user-data or this repository
 - FirstMate's private `data/`, `state/`, and project worktrees require backup
   or deliberate recreation
 

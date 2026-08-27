@@ -1,0 +1,9 @@
+---
+- name: Exercise the shared JDK and Clojure CLI installer
+  hosts: all
+  connection: local
+  become: false
+  gather_facts: false
+  tasks:
+    - name: Install fixture shared toolchain
+      ansible.builtin.include_tasks: ../../tasks/install-shared-clojure-toolchain.yml
