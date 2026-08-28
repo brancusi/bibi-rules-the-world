@@ -1,0 +1,44 @@
+[Unit]
+Description=Bibi memory observer and ownership-proven browser-leak cleanup
+Documentation=https://github.com/brancusi/bibi-rules-the-world
+# Ownership evidence lives under the agent home, so wait for local mounts.
+After=local-fs.target
+ConditionPathExists={{ memory_guard_config_path }}
+
+[Service]
+Type=oneshot
+ExecStart={{ memory_guard_install_path }} once
+# The guard signals another account's processes and reads their /proc links,
+# so it cannot drop privileges; everything else about the host is out of scope.
+User=root
+CapabilityBoundingSet=CAP_KILL CAP_SYS_PTRACE CAP_DAC_READ_SEARCH
+NoNewPrivileges=true
+# Stay out of the way of real work.
+Nice=10
+IOSchedulingClass=idle
+MemoryMax={{ memory_guard_memory_max }}
+TimeoutStartSec={{ memory_guard_timeout_seconds }}
+# systemd refuses a concurrent start of this unit; the guard additionally holds
+# an flock so a manual one-shot cannot overlap a scheduled run either.
+# Journald is the operator channel. Keep a single run's output bounded there.
+SyslogIdentifier=bibi-memory-guard
+LogRateLimitIntervalSec=30s
+LogRateLimitBurst={{ memory_guard_max_log_lines }}
+# Writes are confined to the guard's own runtime and state directories.
+RuntimeDirectory=bibi-memory-guard
+StateDirectory=bibi-memory-guard
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+RestrictNamespaces=true
+RestrictAddressFamilies=AF_UNIX
+LockPersonality=true

@@ -1,0 +1,15 @@
+[Unit]
+Description=Run the Bibi memory guard on a bounded schedule
+Documentation=https://github.com/brancusi/bibi-rules-the-world
+
+[Timer]
+OnBootSec={{ memory_guard_on_boot_sec }}
+OnUnitInactiveSec={{ memory_guard_interval }}
+# Spread the run so it never lines up with unattended-upgrades or the DO agent.
+RandomizedDelaySec={{ memory_guard_randomized_delay }}
+AccuracySec=1min
+Persistent=false
+Unit=bibi-memory-guard.service
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,9 @@
+---
+- name: Exercise the memory guard installation tasks without root or network access
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  become: false
+  tasks:
+    - name: Run the production memory guard installer
+      ansible.builtin.include_tasks: ../../tasks/install-memory-guard.yml

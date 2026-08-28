@@ -11,7 +11,7 @@ permissions:
 jobs:
   configuration:
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    timeout-minutes: 15
     steps:
       - name: Check out the configuration
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
@@ -19,29 +19,19 @@ jobs:
       - name: Install validators
         run: python3 -m pip install ansible-core ansible-lint yamllint
 
+      # Every step below runs a `make lint` target, so the local gate and CI
+      # cannot drift apart. Run `make lint` to reproduce all of them at once.
       - name: Validate YAML
-        run: >-
-          yamllint
-          -d '{extends: default, rules: {line-length: {max: 160}, document-start: disable, comments: disable}}'
-          cloud-init.yaml group_vars/all.yml site.yml tasks/install-doctl.yml tasks/install-cloudflare-skills.yml
-          tests/fixtures/doctl-install.yml tests/fixtures/cloudflare-skills-install.yml
+        run: make yaml
 
-      - name: Lint the Ansible playbooks
-        run: ansible-lint site.yml tests/fixtures/doctl-install.yml tests/fixtures/cloudflare-skills-install.yml
+      - name: Lint and syntax-check the Ansible playbooks
+        run: make ansible
 
-      - name: Check Ansible syntax
-        run: |
-          ansible-playbook --syntax-check -i 'localhost,' site.yml
-          ansible-playbook --syntax-check -i 'localhost,' tests/fixtures/doctl-install.yml
-          ansible-playbook --syntax-check -i 'localhost,' tests/fixtures/cloudflare-skills-install.yml
+      - name: Check shell syntax and lint shell scripts and templates
+        run: make shell
 
-      - name: Check shell syntax
-        run: bash -n scripts/render-cloud-init.sh scripts/test-provisioning.sh scripts/verify.sh
-
-      - name: Lint shell scripts and shell templates
-        run: |
-          shellcheck scripts/render-cloud-init.sh scripts/test-provisioning.sh scripts/verify.sh
-          shellcheck templates/bibi-launcher.j2 templates/bibi-machine-update.j2 templates/bibi-motd.j2 templates/bibi-pi-extensions-update.j2 templates/bibi-pi-public-packages-update.j2
+      - name: Compile and unit-test the memory guard
+        run: make python
 
       - name: Exercise provisioning and verification fixtures
-        run: scripts/test-provisioning.sh
+        run: make test

@@ -1,0 +1,11 @@
+# Managed by bibi-rules-the-world.
+#
+# The swap file is a bounded safety margin for idle anonymous pages, not a
+# capacity plan. Keeping swappiness low means hot agent working sets stay in
+# RAM and only genuinely cold pages - exactly what a leaked, idle browser tree
+# holds - are paged out.
+vm.swappiness = {{ swap_swappiness }}
+vm.vfs_cache_pressure = {{ swap_vfs_cache_pressure }}
+# Keep a floor of free pages so an allocation spike has somewhere to land while
+# the guard's next run reclaims a proven leak.
+vm.min_free_kbytes = {{ swap_min_free_kbytes }}

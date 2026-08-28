@@ -100,3 +100,81 @@ no_mistakes_archives:
   aarch64:
     arch: "arm64"
     sha256: "e679370ccfe20e3028c59ed984510e7077996a0d17b8dc196e5b199218f1db9d"
+
+# Memory safety net, reviewed 2026-08-28 after repeated browser QA left
+# reparented chrome-devtools-axi bridges, chrome-devtools-mcp processes, their
+# watchdogs, and headless Chromium trees resident on this 8 GiB swapless host.
+# README.md documents the policy, the protected cases, and the rollback path.
+memory_guard_version_pin: "1.0.0"
+memory_guard_enabled: true
+memory_guard_manage_system: true
+memory_guard_source: "scripts/bibi_memory_guard.py"
+memory_guard_config_template: "templates/bibi-memory-guard.conf.j2"
+memory_guard_service_template: "templates/bibi-memory-guard.service.j2"
+memory_guard_timer_template: "templates/bibi-memory-guard.timer.j2"
+memory_guard_owner: "root"
+memory_guard_group: "root"
+memory_guard_install_path: "/usr/local/sbin/bibi-memory-guard"
+memory_guard_config_path: "/etc/bibi-memory-guard.conf"
+memory_guard_service_path: "/etc/systemd/system/bibi-memory-guard.service"
+memory_guard_timer_path: "/etc/systemd/system/bibi-memory-guard.timer"
+memory_guard_state_dir: "/var/lib/bibi-memory-guard"
+memory_guard_state_file: "/var/lib/bibi-memory-guard/status.json"
+memory_guard_lock_file: "/run/bibi-memory-guard/run.lock"
+
+# Ownership oracles. A leaked tree is only cleaned when these prove the owning
+# worktree finished or disappeared; every name here is protective only.
+memory_guard_axi_state_dir: "{{ bibi_agent_home }}/.chrome-devtools-axi"
+memory_guard_firstmate_state_dir: "{{ bibi_agent_home }}/firstmate/state"
+memory_guard_worktree_root: "{{ bibi_agent_home }}/.treehouse"
+memory_guard_owner_commands:
+  - "claude"
+  - "pi"
+  - "codex"
+  - "opencode"
+  - "cursor-agent"
+  - "amp"
+  - "goose"
+  - "aider"
+
+# Observation thresholds: these raise alerts and never authorise a kill.
+memory_guard_mem_available_warn_percent: 20
+memory_guard_mem_available_critical_percent: 10
+memory_guard_swap_used_warn_percent: 25
+memory_guard_swap_used_critical_percent: 60
+
+# Destructive eligibility: independent of memory pressure by design.
+memory_guard_leak_min_age_seconds: 3600
+memory_guard_leak_min_member_age_seconds: 300
+memory_guard_leak_min_tree_rss_kb: 262144
+memory_guard_leak_max_tree_processes: 60
+memory_guard_leak_max_trees_per_run: 2
+memory_guard_owner_task_settled_seconds: 900
+memory_guard_busy_state_fresh_seconds: 3600
+
+# Termination behaviour, schedule, and bounded reporting.
+memory_guard_term_grace_seconds: 10
+memory_guard_term_poll_interval_seconds: 0.5
+memory_guard_max_log_lines: 200
+memory_guard_interval: "15min"
+memory_guard_on_boot_sec: "10min"
+memory_guard_randomized_delay: "2min"
+memory_guard_timeout_seconds: 120
+memory_guard_memory_max: "192M"
+
+# A bounded 2 GiB swap file: 25% of RAM, deliberately far too small to absorb a
+# repeat of the 5.1 GiB leak, so it stays a margin and never a substitute for
+# cleanup. Swap usage is itself an alerting signal in the guard.
+swap_manage_system: true
+swap_sysctl_template: "templates/bibi-memory-sysctl.conf.j2"
+swap_tool_path: "/usr/sbin:/sbin:/usr/bin:/bin"
+swap_file_path: "/swapfile"
+swap_file_owner: "root"
+swap_file_group: "root"
+swap_file_size_mb: 2048
+swap_file_max_size_mb: 4096
+swap_file_priority: 10
+swap_sysctl_path: "/etc/sysctl.d/60-bibi-memory.conf"
+swap_swappiness: 10
+swap_vfs_cache_pressure: 50
+swap_min_free_kbytes: 131072
