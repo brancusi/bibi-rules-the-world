@@ -11,12 +11,13 @@ YAMLLINT_CONFIG := {extends: default, rules: {line-length: {max: 160}, document-
 lint: yaml ansible shell python test
 
 yaml:
-	yamllint -d '$(YAMLLINT_CONFIG)' cloud-init.yaml group_vars/all.yml site.yml shared-clojure-toolchain.yml tasks/install-doctl.yml tasks/install-cloudflare-skills.yml tasks/install-shared-clojure-toolchain.yml tasks/install-memory-guard.yml tasks/install-swap-safety-net.yml tests/fixtures/doctl-install.yml tests/fixtures/cloudflare-skills-install.yml tests/fixtures/shared-clojure-toolchain-install.yml tests/fixtures/memory-guard-install.yml tests/fixtures/swap-safety-net-install.yml
+	yamllint -d '$(YAMLLINT_CONFIG)' cloud-init.yaml group_vars/all.yml site.yml shared-clojure-toolchain.yml tasks/install-axi-tools.yml tasks/install-doctl.yml tasks/install-cloudflare-skills.yml tasks/install-shared-clojure-toolchain.yml tasks/install-memory-guard.yml tasks/install-swap-safety-net.yml tests/fixtures/axi-tools-install.yml tests/fixtures/doctl-install.yml tests/fixtures/cloudflare-skills-install.yml tests/fixtures/shared-clojure-toolchain-install.yml tests/fixtures/memory-guard-install.yml tests/fixtures/swap-safety-net-install.yml
 
 ansible:
-	ansible-lint site.yml shared-clojure-toolchain.yml tests/fixtures/doctl-install.yml tests/fixtures/cloudflare-skills-install.yml tests/fixtures/shared-clojure-toolchain-install.yml tests/fixtures/memory-guard-install.yml tests/fixtures/swap-safety-net-install.yml
+	ansible-lint site.yml shared-clojure-toolchain.yml tests/fixtures/axi-tools-install.yml tests/fixtures/doctl-install.yml tests/fixtures/cloudflare-skills-install.yml tests/fixtures/shared-clojure-toolchain-install.yml tests/fixtures/memory-guard-install.yml tests/fixtures/swap-safety-net-install.yml
 	ansible-playbook --syntax-check -i 'localhost,' site.yml
 	ansible-playbook --syntax-check -i 'localhost,' shared-clojure-toolchain.yml
+	ansible-playbook --syntax-check -i 'localhost,' tests/fixtures/axi-tools-install.yml
 	ansible-playbook --syntax-check -i 'localhost,' tests/fixtures/doctl-install.yml
 	ansible-playbook --syntax-check -i 'localhost,' tests/fixtures/cloudflare-skills-install.yml
 	ansible-playbook --syntax-check -i 'localhost,' tests/fixtures/shared-clojure-toolchain-install.yml

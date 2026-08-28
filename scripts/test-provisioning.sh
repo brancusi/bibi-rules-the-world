@@ -377,6 +377,98 @@ if run_installer x86_64 "$tmp_dir/version-vars.yml" "$tmp_dir/version.log"; then
 fi
 [[ ! -e "$tmp_dir/version-state/bin/doctl" ]] || fail "version mismatch installed a binary"
 
+# Exercise the production AXI tool installation task with a hermetic npm stub:
+# a clean host, an older installed browser CLI, and an already-pinned host. The
+# stub never reaches the network and never touches the real global npm root.
+axi_dir="$tmp_dir/axi"
+axi_root="$axi_dir/global-npm"
+axi_bin="$axi_dir/bin"
+mkdir -p "$axi_root" "$axi_bin"
+cat >"$axi_bin/npm" <<'EOF'
+#!/usr/bin/env bash
+# Minimal stand-in for `npm install --global --ignore-scripts <spec>...` that
+# records its invocation and reconciles fixture metadata to the requested pins.
+set -euo pipefail
+printf '%s\n' "$*" >>"$BIBI_TEST_NPM_LOG"
+[[ $1 == install ]] || { echo "unexpected npm subcommand: $1" >&2; exit 1; }
+shift
+global=0
+ignore_scripts=0
+specs=()
+for arg in "$@"; do
+  case "$arg" in
+    --global) global=1 ;;
+    --ignore-scripts) ignore_scripts=1 ;;
+    -*) echo "unexpected npm flag: $arg" >&2; exit 1 ;;
+    *) specs+=("$arg") ;;
+  esac
+done
+[[ $global == 1 && $ignore_scripts == 1 ]] || { echo "npm called without --global --ignore-scripts" >&2; exit 1; }
+changed=0
+for spec in "${specs[@]}"; do
+  name=${spec%@*}
+  version=${spec##*@}
+  manifest="$BIBI_TEST_NPM_ROOT/$name/package.json"
+  if [[ -r "$manifest" ]] && grep -Fq "\"version\":\"$version\"" "$manifest"; then
+    continue
+  fi
+  mkdir -p "$BIBI_TEST_NPM_ROOT/$name"
+  printf '{"name":"%s","version":"%s"}\n' "$name" "$version" >"$manifest"
+  changed=1
+done
+if [[ $changed == 1 ]]; then
+  printf 'added %s packages in 1s\n' "${#specs[@]}"
+else
+  printf 'up to date in 1s\n'
+fi
+EOF
+chmod 0755 "$axi_bin/npm"
+axi_installed_version() {
+  jq -er '.version' "$axi_root/chrome-devtools-axi/package.json"
+}
+run_axi_installer() {
+  PATH="$axi_bin:$PATH" \
+  BIBI_TEST_NPM_ROOT="$axi_root" \
+  BIBI_TEST_NPM_LOG="$axi_dir/npm-calls.log" \
+    ansible-playbook --inventory 'localhost,' \
+      "$root_dir/tests/fixtures/axi-tools-install.yml" \
+      --extra-vars "@$root_dir/group_vars/all.yml" \
+      --extra-vars "axi_install_user=$(id -un) axi_install_become=false" >"$1" 2>&1
+}
+axi_pin=$(python3 -c 'import sys,yaml;print(next(p for p in yaml.safe_load(open(sys.argv[1]))["axi_packages"] if p.startswith("chrome-devtools-axi@")))' \
+  "$root_dir/group_vars/all.yml")
+[[ $axi_pin == chrome-devtools-axi@0.1.31 ]] \
+  || fail "reviewed chrome-devtools-axi pin is $axi_pin, expected chrome-devtools-axi@0.1.31"
+
+must_succeed "$axi_dir/clean.log" "clean AXI tool installation failed" \
+  run_axi_installer "$axi_dir/clean.log"
+[[ $(axi_installed_version) == 0.1.31 ]] || fail "clean provisioning did not install chrome-devtools-axi 0.1.31"
+grep -Eq 'changed=1([[:space:]]|$)' "$axi_dir/clean.log" || fail "clean AXI installation did not report a change"
+
+# An older browser CLI upgrades to the reviewed pin in one reconciliation.
+printf '{"name":"chrome-devtools-axi","version":"0.1.27"}\n' >"$axi_root/chrome-devtools-axi/package.json"
+must_succeed "$axi_dir/upgrade.log" "AXI tool upgrade failed" \
+  run_axi_installer "$axi_dir/upgrade.log"
+[[ $(axi_installed_version) == 0.1.31 ]] || fail "an older chrome-devtools-axi did not upgrade to 0.1.31"
+grep -Eq 'changed=1([[:space:]]|$)' "$axi_dir/upgrade.log" || fail "AXI upgrade did not report a change"
+
+must_succeed "$axi_dir/idempotent.log" "second AXI reconciliation failed" \
+  run_axi_installer "$axi_dir/idempotent.log"
+grep -Eq 'changed=0([[:space:]]|$)' "$axi_dir/idempotent.log" \
+  || fail "second AXI reconciliation was not idempotent"
+grep -Fq -- '--ignore-scripts' "$axi_dir/npm-calls.log" \
+  || fail "AXI installation did not disable npm package lifecycle scripts"
+grep -Fq 'chrome-devtools-axi@0.1.31' "$axi_dir/npm-calls.log" \
+  || fail "AXI installation did not request the reviewed browser CLI pin"
+
+# An unpinned or moving specification must never reach npm.
+if PATH="$axi_bin:$PATH" BIBI_TEST_NPM_ROOT="$axi_root" BIBI_TEST_NPM_LOG="$axi_dir/npm-calls.log" \
+  ansible-playbook --inventory 'localhost,' "$root_dir/tests/fixtures/axi-tools-install.yml" \
+    --extra-vars "axi_install_user=$(id -un) axi_install_become=false" \
+    --extra-vars '{"axi_packages": ["chrome-devtools-axi@latest"]}' >"$axi_dir/unpinned.log" 2>&1; then
+  fail "AXI installation accepted a moving npm tag"
+fi
+
 # Exercise bibi-verify's exact version and metadata checks with local fixtures.
 verify_dir="$tmp_dir/verify"
 mkdir -p "$verify_dir"
@@ -436,7 +528,7 @@ global_specs=(
   'wrangler@4.125.0'
   'firecrawl-cli@1.19.27'
   'gh-axi@0.1.30'
-  'chrome-devtools-axi@0.1.27'
+  'chrome-devtools-axi@0.1.31'
   'lavish-axi@0.1.50'
   'tasks-axi@0.2.5'
   'quota-axi@0.1.29'
@@ -466,7 +558,7 @@ cat >>"$verify_dir/versions" <<EOF
 pi_package=@earendil-works/pi-coding-agent@0.83.0
 wrangler_package=wrangler@4.125.0
 firecrawl_cli_package=firecrawl-cli@1.19.27
-axi_packages=gh-axi@0.1.30 chrome-devtools-axi@0.1.27 lavish-axi@0.1.50 tasks-axi@0.2.5 quota-axi@0.1.29
+axi_packages=gh-axi@0.1.30 chrome-devtools-axi@0.1.31 lavish-axi@0.1.50 tasks-axi@0.2.5 quota-axi@0.1.29
 pi_public_packages=npm:@tmustier/pi-files-widget@0.2.0 npm:pi-web-access@0.24.0
 cloudflare_skills_repo=https://github.com/cloudflare/skills.git
 cloudflare_skills_ref=$verify_skills_ref
@@ -486,6 +578,26 @@ if env "${tooling_verify_env[@]}" "$root_dir/scripts/verify.sh" >"$verify_dir/to
   fail "bibi-verify accepted a Wrangler version mismatch"
 fi
 printf '{"name":"wrangler","version":"4.125.0"}\n' >"$global_npm_root/wrangler/package.json"
+
+# The reviewed browser CLI pin is exact: an older, a newer, and a metadata-less
+# global installation are all rejected, and only 0.1.31 passes.
+for bad_axi_version in 0.1.27 0.1.30 0.1.32; do
+  printf '{"name":"chrome-devtools-axi","version":"%s"}\n' "$bad_axi_version" \
+    >"$global_npm_root/chrome-devtools-axi/package.json"
+  if env "${tooling_verify_env[@]}" "$root_dir/scripts/verify.sh" \
+    >"$verify_dir/tooling-axi-$bad_axi_version.log" 2>&1; then
+    fail "bibi-verify accepted chrome-devtools-axi $bad_axi_version"
+  fi
+done
+printf '{"name":"chrome-devtools-axi"}\n' >"$global_npm_root/chrome-devtools-axi/package.json"
+if env "${tooling_verify_env[@]}" "$root_dir/scripts/verify.sh" >"$verify_dir/tooling-axi-invalid.log" 2>&1; then
+  fail "bibi-verify accepted chrome-devtools-axi metadata without a version"
+fi
+printf '{"name":"chrome-devtools-axi","version":"0.1.31"}\n' \
+  >"$global_npm_root/chrome-devtools-axi/package.json"
+env "${tooling_verify_env[@]}" "$root_dir/scripts/verify.sh" >"$verify_dir/tooling-axi-good.log" \
+  || fail "bibi-verify rejected the reviewed chrome-devtools-axi 0.1.31 installation"
+
 rm "$verify_dir/skill-links/wrangler"
 ln -s "$verify_skills_checkout/skills/cloudflare" "$verify_dir/skill-links/wrangler"
 if env "${tooling_verify_env[@]}" "$root_dir/scripts/verify.sh" >"$verify_dir/tooling-bad-skill.log" 2>&1; then

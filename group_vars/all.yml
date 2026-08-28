@@ -40,12 +40,15 @@ clojure_cli_sha256: "13769da6d63a98deb2024378ae1a64e4ee211ac1035340dfca7a6944c41
 
 # Exact npm pins observed and source-reviewed on 2026-08-24. Deliberately
 # update these in a PR; moving npm tags are not provisioning inputs.
+# chrome-devtools-axi moved to the Captain-approved 0.1.31 on 2026-08-28,
+# verified through the same trusted registry path the installer uses
+# (`npm view chrome-devtools-axi@0.1.31 name version dist.integrity`).
 pi_version: "0.83.0"
 wrangler_package: "wrangler@4.125.0"
 firecrawl_cli_package: "firecrawl-cli@1.19.27"
 axi_packages:
   - "gh-axi@0.1.30"
-  - "chrome-devtools-axi@0.1.27"
+  - "chrome-devtools-axi@0.1.31"
   - "lavish-axi@0.1.50"
   - "tasks-axi@0.2.5"
   - "quota-axi@0.1.29"
