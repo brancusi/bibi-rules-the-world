@@ -981,6 +981,17 @@ class WorktreeResolutionTests(unittest.TestCase):
 
 
 class ConfigTests(unittest.TestCase):
+    def test_every_configured_key_is_actually_consulted(self) -> None:
+        """A key nobody reads is a policy the operator thinks they set."""
+        source = GUARD_PATH.read_text(encoding="utf-8")
+        consulted = {"owner_user"}  # read through resolve_owner_uid, not config[...]
+        for key in guard.DEFAULTS:
+            with self.subTest(key=key):
+                self.assertTrue(
+                    key in consulted or f'config["{key}"]' in source,
+                    f"{key} is configurable but never read",
+                )
+
     def test_defaults_load_without_a_file(self) -> None:
         config = guard.load_config(None)
         self.assertEqual(config["leak_min_age_seconds"], 3600)

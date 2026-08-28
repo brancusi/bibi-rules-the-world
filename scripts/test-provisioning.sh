@@ -10,6 +10,19 @@ fail() {
   exit 1
 }
 
+# Every helper below writes its playbook output to a log instead of the console,
+# so a failure that is not expected would otherwise abort this script with no
+# diagnostic at all. Wrap any run that must succeed in this.
+must_succeed() {
+  local log=$1 message=$2
+  shift 2
+  if ! "$@"; then
+    echo "test failure: $message" >&2
+    tail -n 40 "$log" >&2
+    exit 1
+  fi
+}
+
 make_archive() {
   local output=$1 architecture=$2 version=$3 staging
   staging=$(mktemp -d "$tmp_dir/staging.XXXXXX")
@@ -96,17 +109,20 @@ cloudflare_skill_names: [cloudflare, wrangler]
 cloudflare_skills_owner: "$(id -un)"
 cloudflare_skills_become: false
 EOF
-ansible-playbook --inventory 'localhost,' \
-  "$root_dir/tests/fixtures/cloudflare-skills-install.yml" \
-  --extra-vars "@$tmp_dir/cloudflare-skills-vars.yml" >"$tmp_dir/cloudflare-skills-first.log" 2>&1
+run_cloudflare_skills_installer() {
+  ansible-playbook --inventory 'localhost,' \
+    "$root_dir/tests/fixtures/cloudflare-skills-install.yml" \
+    --extra-vars "@$tmp_dir/cloudflare-skills-vars.yml" >"$1" 2>&1
+}
+must_succeed "$tmp_dir/cloudflare-skills-first.log" "clean Cloudflare skill installation failed" \
+  run_cloudflare_skills_installer "$tmp_dir/cloudflare-skills-first.log"
 [[ $(readlink -f "$skill_state/links/cloudflare") == "$skill_state/checkout/skills/cloudflare" ]] \
   || fail "cloudflare skill was not linked to the reviewed checkout"
 [[ $(readlink -f "$skill_state/links/wrangler") == "$skill_state/checkout/skills/wrangler" ]] \
   || fail "wrangler skill was not linked to the reviewed checkout"
 [[ ! -e "$skill_state/links/cloudflare/stale.txt" ]] || fail "unmanaged Cloudflare skill copy survived reconciliation"
-ansible-playbook --inventory 'localhost,' \
-  "$root_dir/tests/fixtures/cloudflare-skills-install.yml" \
-  --extra-vars "@$tmp_dir/cloudflare-skills-vars.yml" >"$tmp_dir/cloudflare-skills-second.log" 2>&1
+must_succeed "$tmp_dir/cloudflare-skills-second.log" "second Cloudflare skill reconciliation failed" \
+  run_cloudflare_skills_installer "$tmp_dir/cloudflare-skills-second.log"
 grep -Eq 'changed=0([[:space:]]|$)' "$tmp_dir/cloudflare-skills-second.log" \
   || fail "second Cloudflare skill reconciliation was not idempotent"
 
@@ -250,7 +266,8 @@ run_toolchain_installer() {
     --extra-vars "@$tmp_dir/toolchain-vars.yml" \
     --extra-vars 'ansible_architecture=x86_64' >"$output" 2>&1
 }
-run_toolchain_installer "$tmp_dir/toolchain-first.log"
+must_succeed "$tmp_dir/toolchain-first.log" "clean shared toolchain installation failed" \
+  run_toolchain_installer "$tmp_dir/toolchain-first.log"
 java_stdout=$("$toolchain_state/bin/java" -fullversion 2>"$tmp_dir/java-fullversion.stderr")
 [[ -z "$java_stdout" ]] || fail "fixture java -fullversion unexpectedly wrote to stdout"
 [[ $(<"$tmp_dir/java-fullversion.stderr") == 'openjdk full version "21.0.12+8-LTS"' ]] \
@@ -269,12 +286,14 @@ import sys
 path = pathlib.Path(sys.argv[1])
 path.write_text(path.read_text().replace("version=1.12.4.1618", "version=1.11.1.1"))
 PY
-run_toolchain_installer "$tmp_dir/toolchain-repair.log"
+must_succeed "$tmp_dir/toolchain-repair.log" "shared toolchain repair failed" \
+  run_toolchain_installer "$tmp_dir/toolchain-repair.log"
 [[ $("$toolchain_state/bin/java" -fullversion 2>&1) == 'openjdk full version "21.0.12+8-LTS"' ]] \
   || fail "shared JDK version mismatch was not repaired"
 [[ $("$toolchain_state/bin/clojure" --version) == 'Clojure CLI version 1.12.4.1618' ]] \
   || fail "shared Clojure CLI version mismatch was not repaired"
-run_toolchain_installer "$tmp_dir/toolchain-idempotent.log"
+must_succeed "$tmp_dir/toolchain-idempotent.log" "shared toolchain reconciliation failed" \
+  run_toolchain_installer "$tmp_dir/toolchain-idempotent.log"
 grep -Eq 'changed=0([[:space:]]|$)' "$tmp_dir/toolchain-idempotent.log" \
   || fail "second ready shared toolchain reconciliation was not idempotent"
 cat >"$toolchain_state/versions" <<EOF
@@ -326,14 +345,17 @@ amd64_checksum=$(sha256sum "$amd64_archive" | awk '{print $1}')
 arm64_checksum=$(sha256sum "$arm64_archive" | awk '{print $1}')
 
 write_vars "$tmp_dir/amd64-vars.yml" "$tmp_dir/amd64-state" "$release_dir" "$amd64_checksum" "$arm64_checksum"
-run_installer x86_64 "$tmp_dir/amd64-vars.yml" "$tmp_dir/amd64-first.log"
+must_succeed "$tmp_dir/amd64-first.log" "clean amd64 doctl installation failed" \
+  run_installer x86_64 "$tmp_dir/amd64-vars.yml" "$tmp_dir/amd64-first.log"
 grep -q '"architecture":"amd64"' <("$tmp_dir/amd64-state/bin/doctl" version --output json) \
   || fail "x86_64 did not select the amd64 artifact"
-run_installer x86_64 "$tmp_dir/amd64-vars.yml" "$tmp_dir/amd64-second.log"
+must_succeed "$tmp_dir/amd64-second.log" "second amd64 doctl reconciliation failed" \
+  run_installer x86_64 "$tmp_dir/amd64-vars.yml" "$tmp_dir/amd64-second.log"
 grep -Eq 'changed=0([[:space:]]|$)' "$tmp_dir/amd64-second.log" || fail "second doctl reconciliation was not idempotent"
 
 write_vars "$tmp_dir/arm64-vars.yml" "$tmp_dir/arm64-state" "$release_dir" "$amd64_checksum" "$arm64_checksum"
-run_installer aarch64 "$tmp_dir/arm64-vars.yml" "$tmp_dir/arm64.log"
+must_succeed "$tmp_dir/arm64.log" "aarch64 doctl installation failed" \
+  run_installer aarch64 "$tmp_dir/arm64-vars.yml" "$tmp_dir/arm64.log"
 grep -q '"architecture":"arm64"' <("$tmp_dir/arm64-state/bin/doctl" version --output json) \
   || fail "aarch64 did not select the arm64 artifact"
 
@@ -541,7 +563,8 @@ run_memory_guard_installer() {
     "$root_dir/tests/fixtures/memory-guard-install.yml" \
     --extra-vars "@$tmp_dir/memory-guard-vars.yml" >"$1" 2>&1
 }
-run_memory_guard_installer "$tmp_dir/memory-guard-first.log"
+must_succeed "$tmp_dir/memory-guard-first.log" "clean memory guard installation failed" \
+  run_memory_guard_installer "$tmp_dir/memory-guard-first.log"
 [[ -x "$guard_state/sbin/bibi-memory-guard" ]] || fail "memory guard was not installed"
 grep -q "^worktree_root=$guard_home/.treehouse$" "$guard_state/etc/bibi-memory-guard.conf" \
   || fail "memory guard policy did not render its ownership oracles"
@@ -549,7 +572,8 @@ grep -q '^ExecStart=.*bibi-memory-guard once$' "$guard_state/systemd/bibi-memory
   || fail "memory guard service does not run the guard"
 grep -q '^OnUnitInactiveSec=15min$' "$guard_state/systemd/bibi-memory-guard.timer" \
   || fail "memory guard timer does not use the reviewed interval"
-run_memory_guard_installer "$tmp_dir/memory-guard-second.log"
+must_succeed "$tmp_dir/memory-guard-second.log" "second memory guard reconciliation failed" \
+  run_memory_guard_installer "$tmp_dir/memory-guard-second.log"
 grep -Eq 'changed=0([[:space:]]|$)' "$tmp_dir/memory-guard-second.log" \
   || fail "second memory guard reconciliation was not idempotent"
 
@@ -601,13 +625,15 @@ run_swap_installer() {
     "$root_dir/tests/fixtures/swap-safety-net-install.yml" \
     --extra-vars "@$tmp_dir/swap-vars.yml" "${@:2}" >"$1" 2>&1
 }
-run_swap_installer "$tmp_dir/swap-first.log"
+must_succeed "$tmp_dir/swap-first.log" "clean swap safety net installation failed" \
+  run_swap_installer "$tmp_dir/swap-first.log"
 [[ $(stat -c '%a %s' "$swap_state/swapfile") == "600 8388608" ]] \
   || fail "swap file was not created with the reviewed size and mode"
 swaplabel "$swap_state/swapfile" >/dev/null || fail "swap file carries no swap signature"
 grep -q '^vm.swappiness = 10$' "$swap_state/60-bibi-memory.conf" \
   || fail "swap tuning did not render a low swappiness"
-run_swap_installer "$tmp_dir/swap-second.log"
+must_succeed "$tmp_dir/swap-second.log" "second swap reconciliation failed" \
+  run_swap_installer "$tmp_dir/swap-second.log"
 grep -Eq 'changed=0([[:space:]]|$)' "$tmp_dir/swap-second.log" \
   || fail "second swap reconciliation was not idempotent"
 if run_swap_installer "$tmp_dir/swap-oversize.log" \

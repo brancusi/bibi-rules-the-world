@@ -60,9 +60,8 @@ DEFAULT_CONFIG_PATH = "/etc/bibi-memory-guard.conf"
 # file at DEFAULT_CONFIG_PATH is authoritative on a provisioned host; these
 # values keep the script runnable and testable on its own.
 DEFAULTS: dict[str, str] = {
-    # Identity of the account whose processes may ever be signalled.
+    # The only account whose processes may ever be signalled.
     "owner_user": "bibi",
-    "owner_home": "/home/bibi",
     # Ownership oracles.
     "axi_state_dir": "/home/bibi/.chrome-devtools-axi",
     "firstmate_state_dir": "/home/bibi/firstmate/state",

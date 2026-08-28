@@ -97,8 +97,10 @@
 - name: Refuse a guard that cannot observe memory or apply its policy
   ansible.builtin.assert:
     that:
-      - memory_guard_report.stdout is search('^memory: mem_total_kb=[0-9]+', multiline=True)
-      - memory_guard_report.stdout is search('^result: mode=report', multiline=True)
+      - >-
+        memory_guard_report.stdout is search('^memory: mem_total_kb=[0-9]+', multiline=True)
+      - >-
+        memory_guard_report.stdout is search('^result: mode=report', multiline=True)
     fail_msg: "The installed memory guard did not produce a memory observation."
 
 - name: Reload systemd for changed memory guard units
