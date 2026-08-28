@@ -1,0 +1,130 @@
+---
+# Declarative installation of the memory observer and browser-leak reaper.
+#
+# The guard's safety argument rests entirely on evidence it reads at run time,
+# so this task file installs the decision logic, its reviewed thresholds, and
+# the systemd service + timer that runs it. Reconciliation itself is never
+# destructive: it only ever executes the guard in read-only report mode.
+
+- name: Refuse an unreviewed cleanup policy
+  ansible.builtin.assert:
+    that:
+      - memory_guard_leak_min_age_seconds | int >= 900
+      - memory_guard_leak_min_member_age_seconds | int >= 60
+      - memory_guard_leak_max_trees_per_run | int >= 1
+      - memory_guard_leak_max_trees_per_run | int <= 5
+      - memory_guard_leak_max_tree_processes | int >= 5
+      - memory_guard_owner_task_settled_seconds | int >= 300
+      - memory_guard_mem_available_critical_percent | int < memory_guard_mem_available_warn_percent | int
+    fail_msg: >-
+      The memory guard policy is outside its reviewed bounds. Grace periods
+      protect live sessions and the per-run cap bounds blast radius; both must
+      stay conservative.
+
+- name: Create the memory guard state directory
+  ansible.builtin.file:
+    path: "{{ memory_guard_state_dir }}"
+    state: directory
+    owner: "{{ memory_guard_owner }}"
+    group: "{{ memory_guard_group }}"
+    mode: "0755"
+
+- name: Install the memory guard
+  ansible.builtin.copy:
+    src: "{{ memory_guard_source }}"
+    dest: "{{ memory_guard_install_path }}"
+    owner: "{{ memory_guard_owner }}"
+    group: "{{ memory_guard_group }}"
+    mode: "0755"
+  register: memory_guard_program
+
+- name: Install the reviewed memory guard policy
+  ansible.builtin.template:
+    src: "{{ memory_guard_config_template }}"
+    dest: "{{ memory_guard_config_path }}"
+    owner: "{{ memory_guard_owner }}"
+    group: "{{ memory_guard_group }}"
+    mode: "0644"
+  register: memory_guard_policy
+
+- name: Install the memory guard service
+  ansible.builtin.template:
+    src: "{{ memory_guard_service_template }}"
+    dest: "{{ memory_guard_service_path }}"
+    owner: "{{ memory_guard_owner }}"
+    group: "{{ memory_guard_group }}"
+    mode: "0644"
+  register: memory_guard_service
+
+- name: Install the memory guard timer
+  ansible.builtin.template:
+    src: "{{ memory_guard_timer_template }}"
+    dest: "{{ memory_guard_timer_path }}"
+    owner: "{{ memory_guard_owner }}"
+    group: "{{ memory_guard_group }}"
+    mode: "0644"
+  register: memory_guard_timer
+
+- name: Read the installed memory guard version
+  ansible.builtin.command:
+    argv:
+      - "{{ memory_guard_install_path }}"
+      - "--version"
+  register: memory_guard_version
+  changed_when: false
+
+- name: Refuse an unexpected memory guard version
+  ansible.builtin.assert:
+    that:
+      - memory_guard_version.stdout | trim == memory_guard_version_pin
+    fail_msg: >-
+      Installed memory guard reports {{ memory_guard_version.stdout | trim }},
+      not the reviewed {{ memory_guard_version_pin }}.
+
+# A read-only pass proves the guard parses its reviewed policy, reads /proc,
+# and reaches its ownership oracles on this host before the timer ever runs a
+# destructive pass.
+- name: Exercise the guard in report mode
+  ansible.builtin.command:
+    argv:
+      - "{{ memory_guard_install_path }}"
+      - report
+      - --config
+      - "{{ memory_guard_config_path }}"
+  register: memory_guard_report
+  changed_when: false
+
+- name: Refuse a guard that cannot observe memory or apply its policy
+  ansible.builtin.assert:
+    that:
+      - >-
+        memory_guard_report.stdout is search('^memory: mem_total_kb=[0-9]+', multiline=True)
+      - >-
+        memory_guard_report.stdout is search('^result: mode=report', multiline=True)
+    fail_msg: "The installed memory guard did not produce a memory observation."
+
+- name: Reload systemd for changed memory guard units
+  ansible.builtin.systemd_service:
+    daemon_reload: true
+  when:
+    - memory_guard_manage_system | bool
+    - memory_guard_service.changed or memory_guard_timer.changed
+
+- name: Enable the memory guard timer
+  ansible.builtin.systemd_service:
+    name: bibi-memory-guard.timer
+    enabled: "{{ memory_guard_enabled | bool }}"
+    state: "{{ 'started' if memory_guard_enabled | bool else 'stopped' }}"
+  when: memory_guard_manage_system | bool
+
+# Restarting the timer re-arms its schedule against the new unit; it never
+# starts the service, so reconciliation still performs no cleanup.
+- name: Re-arm the memory guard timer after a policy change
+  ansible.builtin.systemd_service:
+    name: bibi-memory-guard.timer
+    state: restarted
+  when:
+    - memory_guard_manage_system | bool
+    - memory_guard_enabled | bool
+    - memory_guard_program.changed or memory_guard_policy.changed
+      or memory_guard_service.changed or memory_guard_timer.changed

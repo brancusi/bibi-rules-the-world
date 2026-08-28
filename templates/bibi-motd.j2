@@ -13,3 +13,27 @@ cat <<'ART'
 
 ART
 
+# Memory health, straight from the guard's own bounded record. This is a
+# read-only status line on an existing operator surface; it starts nothing and
+# invents no new control plane.
+state_file="{{ memory_guard_state_file }}"
+available_kb=$(awk '/^MemAvailable:/ { print $2 }' /proc/meminfo)
+swap_summary=$(awk 'NR > 1 { total += $3; used += $4 } END {
+  if (total > 0) printf "swap %d/%d MB", used / 1024, total / 1024; else printf "no swap"
+}' /proc/swaps)
+
+if [[ -r "$state_file" ]] && command -v jq >/dev/null 2>&1; then
+  guard_line=$(jq -r '
+    "level=" + .level
+    + " checked=" + (.timestamp | todate)
+    + " trees=" + ((.trees | length) | tostring)
+    + " cleaned=" + ((.cleanups | length) | tostring)
+    + (if (.alerts | length) > 0 then " alerts=" + (.alerts | join(",")) else "" end)
+  ' "$state_file" 2>/dev/null || true)
+else
+  guard_line="no run recorded yet"
+fi
+
+printf '  Memory: %d MB available, %s\n' "$((available_kb / 1024))" "$swap_summary"
+printf '  Guard:  %s\n' "${guard_line:-unavailable}"
+printf '          %s status | dry-run   (see README)\n\n' "{{ memory_guard_install_path }}"

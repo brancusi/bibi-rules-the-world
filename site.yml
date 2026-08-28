@@ -472,6 +472,12 @@
         group: root
         mode: "0755"
 
+    - name: Provision the bounded swap safety net
+      ansible.builtin.include_tasks: tasks/install-swap-safety-net.yml
+
+    - name: Install the memory guard service and timer
+      ansible.builtin.include_tasks: tasks/install-memory-guard.yml
+
     - name: Record the provisioned versions
       ansible.builtin.template:
         src: templates/provisioned-versions.j2

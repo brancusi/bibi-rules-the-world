@@ -6,3 +6,6 @@ cloud-init.rendered.yaml
 .lsp
 .calva
 .clj-kondo
+# Python bytecode from the memory guard tests
+__pycache__/
+*.pyc

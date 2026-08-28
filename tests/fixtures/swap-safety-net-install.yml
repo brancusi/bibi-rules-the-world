@@ -1,0 +1,9 @@
+---
+- name: Exercise the swap safety net tasks without root or activating swap
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  become: false
+  tasks:
+    - name: Run the production swap safety net installer
+      ansible.builtin.include_tasks: ../../tasks/install-swap-safety-net.yml

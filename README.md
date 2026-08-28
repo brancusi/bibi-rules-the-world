@@ -24,6 +24,8 @@ Pi, Herdr, FirstMate, source code, builds, and credentials stay on the Droplet.
 - the DigitalOcean bootstrap key is removed from root after it is copied to
   `bibi-admin` and `bibi`
 - UFW, fail2ban, and unattended security updates
+- a bounded 2 GiB swap file and a periodic memory guard that cleans only
+  ownership-proven browser-helper leaks
 - GitHub Actions validation for YAML, Ansible, and cloud-init rendering
 
 Herdr is an experimental FirstMate backend. That choice is explicit in
@@ -122,7 +124,9 @@ package lifecycle scripts. Public Pi packages are reconciled through Pi's own
 package installer with npm lifecycle scripts disabled. The official Cloudflare
 skill repository is checked out at a
 reviewed commit, and only its `cloudflare` and `wrangler` skills are linked into
-the daily user's Pi skill directory. Provisioning does **not** authenticate
+the daily user's Pi skill directory. A bounded swap file and the memory guard's
+service and timer are installed; provisioning runs the guard only in read-only
+report mode and never performs a cleanup. Provisioning does **not** authenticate
 Cloudflare or doctl, and it does not fetch the private Pi Extensions repository.
 Do not interrupt provisioning midway.
 
@@ -240,8 +244,9 @@ the PTY session alive when WezTerm closes or SSH disconnects. Reconnect with
 As the daily user, verify the shared JDK 21/Clojure CLI resolution, command
 availability, exact global npm CLI versions, pinned public Pi packages, the
 official Cloudflare skill source and links, the exact doctl version and root
-ownership/mode, FirstMate configuration, sudo separation, and (when installed)
-the private collection commit/package version. This clean login-shell check is
+ownership/mode, the memory guard version/policy/timer and the bounded swap area,
+FirstMate configuration, sudo separation, and (when installed) the private
+collection commit/package version. This clean login-shell check is
 the authoritative verification command:
 
 ```bash
@@ -264,7 +269,10 @@ cat /etc/bibi-provisioned-versions
    architectures and replace both archive checksums. Review exact npm and public
    Pi package versions before changing them. For Cloudflare skills or Pi
    Extensions, review and replace the full commit ref; never provision a moving
-   branch.
+   branch. The memory guard's grace periods, per-run cap, and swap size are
+   safety bounds, not tuning knobs: `tasks/install-memory-guard.yml` and
+   `tasks/install-swap-safety-net.yml` refuse values outside their reviewed
+   range, and loosening one needs the same review as any other root change.
 2. Run `make lint` locally, review, and push the change.
 
 For a reviewed JDK/Clojure-only repair, the maintenance identity can apply the
@@ -302,6 +310,276 @@ checkout can move beyond this repo's pin; the next Ansible reconciliation may
 return it to the configured commit. Prefer reviewing and bumping `firstmate_ref`
 here so rebuilds remain deterministic.
 
+## Memory safety net
+
+An 8 GiB Droplet with no swap ran out of headroom because browser QA left its
+helper processes behind. This section documents what the safety net does, what
+it refuses to do, and how to drive it.
+
+### What actually happened
+
+Repeated browser QA finished without tearing down its Chrome DevTools tooling.
+Each abandoned session left a five-process tree alive: a `chrome-devtools-axi`
+bridge, an `npm exec chrome-devtools-mcp` launcher, an `sh -c` shim, the MCP
+server, and the MCP telemetry watchdog - plus any headless Chromium the session
+had opened. 125 such processes held about 5.1 GiB.
+
+The causal chain has three separate links, and conflating them is what makes
+naive cleanup dangerous:
+
+| Link | What it is |
+| --- | --- |
+| Initiating trigger | A browser QA task ends without stopping its bridge. Nothing in task teardown stops it. |
+| Masking condition | The bridge is a daemon, so it reparents to PID 1 by design and leaves the agent's process group. The watchdog moves into its *own* process group. With no swap, the resident anonymous pages can never be evicted. |
+| Visible symptom | MemAvailable falls monotonically; the host approaches OOM. |
+
+High RSS is the symptom, not the evidence. On the live host, a leaked tree and
+two perfectly healthy ones were **identical** on every cheap signal:
+
+| Signal | Leaked (`mm-a1`) | Live (`ara8`, `ara8b`) |
+| --- | --- | --- |
+| Reparented to PID 1 | yes | yes |
+| Age | ~21 h | ~17 h |
+| Tree RSS | ~393 MB | ~396 MB / ~400 MB |
+| Bridge port listening | yes | yes |
+| Client connected to that port | no | no |
+
+The one difference: the `artist-archiver` worktree still had a live `claude`
+agent and a non-terminal FirstMate task; the `money-monk` worktree had neither.
+That is the smallest counterfactual, and it is the only thing the guard treats
+as authorisation. Anything that would kill on RSS, age, name, or reparenting
+would have killed two live browser sessions.
+
+### The policy
+
+`bibi-memory-guard` runs from a systemd timer every 15 minutes. Observation and
+destruction are deliberately separate.
+
+**Observation** (raises alerts, never authorises anything):
+
+| Threshold | Default |
+| --- | --- |
+| `mem_available_warn_percent` | 20 |
+| `mem_available_critical_percent` | 10 |
+| `swap_used_warn_percent` | 25 |
+| `swap_used_critical_percent` | 60 |
+
+**Eligibility** (all must hold; none of them mention memory):
+
+| Requirement | Default |
+| --- | --- |
+| Root matches the leak family structurally, by installed script path | - |
+| Root is reparented to PID 1 | - |
+| Root age | >= 3600 s |
+| Every member's age | >= 300 s |
+| Tree RSS | >= 256 MB |
+| Tree size | <= 60 processes |
+| Every member owned by the agent account | - |
+| A bridge is claimed by a `bridge.pid` session file | - |
+| No connected client on that session's port | - |
+| **Positive ownership proof** | see below |
+| Trees cleaned per run | <= 2 |
+
+Positive ownership proof is exactly one of:
+
+- the tree's working directory was **deleted**, so its worktree provably no
+  longer exists; or
+- the worktree is claimed by a FirstMate task whose last status line is `done:`
+  or `failed:`, whose busy flag is not set *and fresh*, whose status file is at
+  least 900 s old, and in which no agent harness process is still running.
+
+Treehouse pool slots are recycled, so several FirstMate tasks can name the same
+worktree over time. When more than one claims it, the **most protective** claim
+wins, so a finished predecessor is never mistaken for the owner while its
+successor is still running there.
+
+A busy flag protects only while it is under `busy_state_fresh_seconds` (3600 s)
+old. An agent that died mid-turn leaves its flag set forever, and treating that
+as permanent protection would make the guard useless against the exact leak it
+exists for. A stale flag stops protecting; it never authorises anything on its
+own, because the terminal-status and live-owner checks still have to pass.
+
+### Protected cases
+
+The guard refuses, alerts, and moves on when any of these hold. Every refusal
+is named in the journal.
+
+| Refusal | Meaning |
+| --- | --- |
+| `owner-process-alive` | An agent harness is still running in that worktree. |
+| `owning-task-busy` | The FirstMate task's busy flag is set. |
+| `owning-task-not-terminal` | The task is `working:`, `blocked:`, `paused:`, or `needs-decision:`. |
+| `owning-task-recently-finished` | The task finished less than 900 s ago. |
+| `owning-task-status-unreadable` | The status file could not be read. |
+| `unclaimed-worktree` | No FirstMate task claims the worktree, so the owner is unknown. |
+| `unresolved-worktree` | The tree runs outside the worktree pool entirely. |
+| `unregistered-bridge` | No `bridge.pid` names this bridge, so its session cannot be identified. |
+| `active-client-connection` | Something is connected to the bridge's port right now. |
+| `root-still-attached` | The root still has a live parent, so it is not orphaned. |
+| `root-below-age-grace` / `member-below-age-grace` | Too young to call abandoned. |
+| `below-rss-floor` | Too small to be worth any risk. |
+| `tree-too-large` | Unexpected shape; refusing is cheaper than mis-scoping. |
+| `foreign-uid-member` | Something not owned by the agent account is inside the tree. |
+| `self-or-ancestor-in-tree` | The guard would be signalling itself. |
+| `pressure-without-eligible-leak` | Memory is low and nothing is provable. Alert only. |
+| `stranded-browser` | An old Chromium with no live bridge or MCP root left in its worktree. Reported, never killed. |
+
+Chromium double-forks, so a browser process reparented to PID 1 is the *normal*
+shape for a healthy session. The guard therefore reports a stranded browser only
+once it is past the leak grace period and no live bridge or MCP root remains in
+its worktree - otherwise the alert would fire on every browser session and train
+operators to ignore it.
+
+Two design rules make this hold:
+
+- **Every name-based match is protective only.** Matching a process name can
+  stop a kill; it can never cause one. Destructive matching is structural (the
+  installed script path) plus ownership proof.
+- **Ambiguity always refuses.** If the guard cannot name a tree's session or
+  find its owner, it reports and alerts rather than guessing.
+
+### Exact kill eligibility and blast radius
+
+An eligible tree is terminated as one exact set: the root plus its transitive
+children by parent link, computed at decision time. Members are signalled
+leaves-first, so the watchdog never sees its parent vanish first. Immediately
+before each signal the guard re-reads `/proc` and compares the process start
+identity, so a recycled PID is skipped rather than hit. `SIGTERM` goes to every
+verified member, then a bounded wait, then `SIGKILL` only to survivors. The
+guard then verifies absence and remeasures MemAvailable.
+
+The tree is walked by parent link, **not** by process group, because the MCP
+watchdog calls `setsid` - a `kill -TERM -PGID` silently leaves it running.
+
+There is no `pkill`, no `killall`, no `killpg`, and no pattern kill anywhere in
+the guard. `os.kill` appears exactly once, always with a single verified PID;
+the provisioning tests assert both facts.
+
+### Why this cannot clean arbitrary memory consumers
+
+The guard's authority comes entirely from being able to *prove* who owned a
+process. That proof exists for this one family because a `chrome-devtools-axi`
+bridge registers itself in a `bridge.pid` file, runs from a known installed
+script path, and holds the owning worktree as its working directory, which maps
+back to a FirstMate task record.
+
+A generic memory hog has none of that. A large `java`, a runaway build, or a
+Chromium that escaped its MCP parent cannot be tied to a finished owner, so
+killing it would be a guess about someone else's live work. The guard reports
+those and refuses. Reclaiming memory from an unproven process is an operator
+decision, not an automated one - which is also why low memory never widens
+eligibility. When memory is critical and nothing is provable, the guard says so
+loudly and does nothing.
+
+### Swap: why a file, not zram
+
+The Droplet had no swap at all, so cold anonymous pages could never leave RAM.
+Both options were considered:
+
+| | Bounded swap file (chosen) | zram |
+| --- | --- | --- |
+| Effect on a leaked idle tree | Pages leave RAM entirely | Pages stay in RAM, compressed |
+| Headroom from 2 GiB | ~2 GiB of real RAM freed | Roughly 0.7-1.3 GiB net, depending on ratio |
+| Cost | Disk writes to local NVMe, paid by pages nobody is touching | CPU on every page in and out |
+| Fit for this incident | The leak profile is cold and idle - ideal swap candidates | Weakest exactly where the leak is largest |
+
+2 GiB (25% of RAM) is deliberately **too small** to absorb a repeat of the
+5.1 GiB leak. It is a margin that keeps the host responsive long enough for the
+guard's next run and for an operator to read the alert; it is not capacity.
+`vm.swappiness=10` keeps hot agent working sets resident, and swap usage above
+25% is itself an alert, so swap makes a leak more visible rather than hiding it.
+`swap_file_max_size_mb` refuses any reviewed size above 4 GiB.
+
+An OOM killer daemon such as `earlyoom` was rejected: it selects victims by
+size and score, which is precisely the unproven, name-and-RSS-based killing this
+design exists to avoid.
+
+### Alerting
+
+The repository has no external operator channel, and this change does not
+invent one. Alerts land on the surfaces that already exist:
+
+- **journald**, under `SyslogIdentifier=bibi-memory-guard`, bounded to 200 lines
+  per run
+- **`/var/lib/bibi-memory-guard/status.json`**, the last run's machine-readable
+  record
+- **the login banner**, which prints MemAvailable, swap usage, and the guard's
+  last verdict
+- **`bibi-verify`**, which fails when the guard, its policy, its timer, or the
+  swap area drifts from the reviewed pins
+
+Nothing recorded on any of these surfaces contains a command line or an
+environment value. Command lines are read once for structural classification
+and discarded before any reporting type is constructed, because agent command
+lines carry task briefs, URLs, and occasionally credentials.
+
+### Operating it
+
+Everything read-only runs as any user; anything that changes state runs as
+`bibi-admin`.
+
+```bash
+# What did the last run decide?
+/usr/local/sbin/bibi-memory-guard status
+
+# Observe now without acting; also refreshes the recorded status.
+sudo /usr/local/sbin/bibi-memory-guard report
+
+# Show the exact tree that would be terminated, and why every other tree is not.
+/usr/local/sbin/bibi-memory-guard dry-run
+
+# Run a real cleanup pass now, out of schedule.
+sudo systemctl start bibi-memory-guard.service
+
+# Timer schedule and recent runs.
+systemctl list-timers bibi-memory-guard.timer
+systemctl status bibi-memory-guard.timer
+journalctl -u bibi-memory-guard.service -n 200
+
+# Swap and tuning.
+swapon --show
+sysctl vm.swappiness vm.vfs_cache_pressure
+```
+
+Always read `dry-run` before starting a real pass. It runs the identical
+decision pipeline and prints a `planned:` line for each tree it would clean.
+
+### Disabling and rolling back
+
+To stop the guard without removing it, set `memory_guard_enabled: false` in
+`group_vars/all.yml` and reconcile; the timer is disabled and stopped, and the
+guard and its policy stay in place for `dry-run` inspection. In an emergency,
+before that change lands:
+
+```bash
+ssh bibi-admin
+sudo systemctl disable --now bibi-memory-guard.timer
+```
+
+To remove the swap safety net, set `swap_manage_system: false` and reconcile,
+then retire the area by hand:
+
+```bash
+sudo swapoff /swapfile
+sudo sed -i '\|^/swapfile |d' /etc/fstab
+sudo rm -f /swapfile /etc/sysctl.d/60-bibi-memory.conf
+```
+
+Reconciliation itself is never destructive: applying `site.yml` installs the
+guard and runs it only in read-only report mode.
+
+### Expected overhead
+
+One run reads `/proc` once for the inventory - plus one more scan per cleanup
+wait poll, and only when it is actually cleaning - together with
+`/proc/net/tcp`, the `bridge.pid` files, and the FirstMate `*.meta`, `*.status`,
+and `*.busy-state` files. On this host that is well under a second
+of CPU at `Nice=10` and idle I/O priority, capped by `MemoryMax=192M` and
+`TimeoutStartSec=120`. At a 15-minute interval the steady-state cost is
+negligible. Runs cannot overlap: systemd refuses a concurrent start of the unit,
+and the guard also holds an `flock` so a manual one-shot cannot race a scheduled
+one.
+
 ## Forward a development port without exposing it
 
 If a remote app listens on `127.0.0.1:3000`, open a second WezTerm tab:
@@ -326,6 +604,9 @@ The rebuild boundary is deliberate:
   restored from user-data or this repository
 - FirstMate's private `data/`, `state/`, and project worktrees require backup
   or deliberate recreation
+- the swap file and the memory guard's recorded status are rebuilt from this
+  repository; the guard's ownership evidence comes from FirstMate state, so a
+  host restored without it will refuse every cleanup until tasks run again
 
 On a clean rebuild, first wait for cloud-init, run `bibi-verify` (the private
 package will be `pending`), perform section 6, then run `bibi-verify` again. To

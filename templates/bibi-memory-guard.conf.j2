@@ -1,0 +1,36 @@
+# Managed by bibi-rules-the-world. Edit group_vars/all.yml and reconcile.
+#
+# Observation thresholds raise alerts. Eligibility thresholds authorise a kill.
+# The two sets are deliberately independent: low memory never lowers the bar
+# for terminating a process, and a proven leak is cleaned before any pressure.
+
+owner_user={{ bibi_agent_user }}
+
+# Ownership oracles. A tree is only cleanable when these prove its owner is
+# finished or gone.
+axi_state_dir={{ memory_guard_axi_state_dir }}
+firstmate_state_dir={{ memory_guard_firstmate_state_dir }}
+worktree_root={{ memory_guard_worktree_root }}
+owner_commands={{ memory_guard_owner_commands | join(' ') }}
+
+# Observation only.
+mem_available_warn_percent={{ memory_guard_mem_available_warn_percent }}
+mem_available_critical_percent={{ memory_guard_mem_available_critical_percent }}
+swap_used_warn_percent={{ memory_guard_swap_used_warn_percent }}
+swap_used_critical_percent={{ memory_guard_swap_used_critical_percent }}
+
+# Destructive eligibility.
+leak_min_age_seconds={{ memory_guard_leak_min_age_seconds }}
+leak_min_member_age_seconds={{ memory_guard_leak_min_member_age_seconds }}
+leak_min_tree_rss_kb={{ memory_guard_leak_min_tree_rss_kb }}
+leak_max_tree_processes={{ memory_guard_leak_max_tree_processes }}
+leak_max_trees_per_run={{ memory_guard_leak_max_trees_per_run }}
+owner_task_settled_seconds={{ memory_guard_owner_task_settled_seconds }}
+busy_state_fresh_seconds={{ memory_guard_busy_state_fresh_seconds }}
+
+# Termination behaviour and bounded reporting.
+term_grace_seconds={{ memory_guard_term_grace_seconds }}
+term_poll_interval_seconds={{ memory_guard_term_poll_interval_seconds }}
+max_log_lines={{ memory_guard_max_log_lines }}
+state_file={{ memory_guard_state_file }}
+lock_file={{ memory_guard_lock_file }}

@@ -176,6 +176,94 @@ verify_shared_clojure_toolchain() {
   fi
 }
 
+verify_memory_safety_net() {
+  local guard_path expected_version config_path state_file swap_path expected_swap_mb
+  local actual_version guard_metadata timer_state level decision_summary swap_kb swap_mb
+  guard_path=$(read_pin memory_guard_install_path)
+  expected_version=$(read_pin memory_guard_version)
+  config_path=$(read_pin memory_guard_config_path)
+  state_file=$(read_pin memory_guard_state_file)
+  swap_path=$(read_pin swap_file_path)
+  expected_swap_mb=$(read_pin swap_file_size_mb)
+
+  if [[ ! -f "$guard_path" || -L "$guard_path" || ! -x "$guard_path" ]]; then
+    printf 'invalid  memory guard must be a regular executable at %s\n' "$guard_path" >&2
+    failed=1
+    return
+  fi
+
+  guard_metadata=$(stat -c '%U:%G %a' "$guard_path")
+  if [[ "$guard_metadata" != "$(read_pin memory_guard_owner):$(read_pin memory_guard_group) 755" ]]; then
+    printf 'invalid  memory guard ownership/mode: found %s\n' "$guard_metadata" >&2
+    failed=1
+  fi
+
+  if ! actual_version=$("$guard_path" --version 2>/dev/null) \
+    || [[ "$actual_version" != "$expected_version" ]]; then
+    printf 'invalid  memory guard version: expected %s, found %s\n' \
+      "$expected_version" "${actual_version:-unavailable}" >&2
+    failed=1
+  else
+    printf 'ok       memory guard %s\n' "$actual_version"
+  fi
+
+  if [[ ! -r "$config_path" ]]; then
+    printf 'missing  memory guard policy %s\n' "$config_path" >&2
+    failed=1
+  elif ! grep -q "^leak_min_age_seconds=$(read_pin memory_guard_leak_min_age_seconds)$" "$config_path"; then
+    echo "invalid  memory guard policy does not carry its reviewed grace period" >&2
+    failed=1
+  else
+    printf 'ok       memory guard policy %s\n' "$config_path"
+  fi
+
+  # The guard's own read-only mode is the authoritative health check: it proves
+  # the policy parses and every ownership oracle is reachable on this host.
+  if ! "$guard_path" report --config "$config_path" >/dev/null 2>&1; then
+    echo "invalid  memory guard cannot complete a read-only observation" >&2
+    failed=1
+  else
+    echo "ok       memory guard observation"
+  fi
+
+  if [[ $(read_pin memory_guard_enabled) == true ]]; then
+    timer_state=$(${BIBI_SYSTEMCTL:-systemctl} is-enabled bibi-memory-guard.timer 2>/dev/null || true)
+    if [[ "$timer_state" != enabled ]]; then
+      printf 'invalid  memory guard timer is %s, expected enabled\n' "${timer_state:-unknown}" >&2
+      failed=1
+    else
+      printf 'ok       memory guard timer %s every %s\n' "$timer_state" "$(read_pin memory_guard_interval)"
+    fi
+  fi
+
+  if [[ -r "$state_file" ]]; then
+    level=$(jq -r '.level // "unknown"' "$state_file" 2>/dev/null || echo unknown)
+    decision_summary=$(jq -r '[.trees[]? | .decision] | group_by(.) | map("\(.[0])=\(length)") | join(" ")' \
+      "$state_file" 2>/dev/null || true)
+    printf 'ok       memory guard last run: level=%s %s\n' "$level" "${decision_summary:-no-trees}"
+  else
+    echo "pending  memory guard has not recorded a run yet"
+  fi
+
+  swap_kb=$(awk -v path="$swap_path" '$1 == path { print $3 }' "${BIBI_PROC_SWAPS:-/proc/swaps}" 2>/dev/null || true)
+  if [[ -z "$swap_kb" ]]; then
+    printf 'invalid  swap safety net %s is not active\n' "$swap_path" >&2
+    failed=1
+  else
+    swap_mb=$((swap_kb / 1024))
+    # A swap area more than a few MB off the reviewed size means someone grew
+    # the margin into a substitute for cleaning leaks.
+    if (( swap_mb < expected_swap_mb - 8 || swap_mb > expected_swap_mb + 8 )); then
+      printf 'invalid  swap safety net size: expected %s MB, found %s MB\n' \
+        "$expected_swap_mb" "$swap_mb" >&2
+      failed=1
+    else
+      printf 'ok       swap safety net %s %s MB (swappiness %s)\n' \
+        "$swap_path" "$swap_mb" "$(read_pin swap_swappiness)"
+    fi
+  fi
+}
+
 verify_doctl() {
   local doctl_path expected_version expected_owner expected_group expected_mode actual_metadata version_json actual_version
   doctl_path=${BIBI_DOCTL_PATH:-$(read_pin doctl_install_path)}
@@ -224,11 +312,15 @@ if [[ ${BIBI_VERIFY_TOOLCHAIN_ONLY:-0} == 1 ]]; then
 elif [[ ${BIBI_VERIFY_DOCTL_ONLY:-0} == 1 ]]; then
   verify_doctl
   exit "$failed"
+elif [[ ${BIBI_VERIFY_MEMORY_ONLY:-0} == 1 ]]; then
+  verify_memory_safety_net
+  exit "$failed"
 elif [[ ${BIBI_VERIFY_TOOLING_ONLY:-0} == 1 ]]; then
   verify_doctl
 else
   verify_shared_clojure_toolchain
   verify_doctl
+  verify_memory_safety_net
 fi
 
 verify_global_npm_spec "$(read_pin pi_package)"
