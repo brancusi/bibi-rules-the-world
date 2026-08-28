@@ -388,6 +388,11 @@ Positive ownership proof is exactly one of:
   or `failed:`, whose busy flag is not set *and fresh*, whose status file is at
   least 900 s old, and in which no agent harness process is still running.
 
+Treehouse pool slots are recycled, so several FirstMate tasks can name the same
+worktree over time. When more than one claims it, the **most protective** claim
+wins, so a finished predecessor is never mistaken for the owner while its
+successor is still running there.
+
 A busy flag protects only while it is under `busy_state_fresh_seconds` (3600 s)
 old. An agent that died mid-turn leaves its flag set forever, and treating that
 as permanent protection would make the guard useless against the exact leak it

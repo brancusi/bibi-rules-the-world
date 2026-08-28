@@ -451,6 +451,44 @@ class OwnershipTests(GuardTestCase):
                 )
                 self.assertEqual(signaller.sent, [])
 
+    def test_a_reused_pool_slot_is_judged_by_its_current_owner(self) -> None:
+        """Treehouse pool slots are recycled, so several tasks name one worktree.
+
+        A finished predecessor must never be mistaken for the worktree's owner
+        while its successor is still running there.
+        """
+        worktree = self.harness.worktree("artist-archiver", slot=3)
+        self.harness.bind_session("ara8", 1000, 9884)
+        self.harness.task("previous-task-a1", worktree, status="done: shipped")
+        self.harness.task("current-task-a1", worktree, status="working: implementing")
+
+        outcome, signaller, _, _ = self.harness.run(bridge_tree(1000, worktree), mode="once")
+        candidate = outcome.candidates[0]
+        self.assertEqual(candidate.owner_task.task, "current-task-a1")
+        self.assertEqual(
+            (candidate.decision, candidate.reason), ("refused", "owning-task-not-terminal")
+        )
+        self.assertEqual(signaller.sent, [])
+
+    def test_a_reused_slot_whose_current_owner_is_busy_is_protected(self) -> None:
+        worktree = self.harness.worktree("artist-archiver", slot=3)
+        self.harness.bind_session("ara8", 1000, 9884)
+        self.harness.task("previous-task-a1", worktree, status="done: shipped")
+        self.harness.task(
+            "current-task-a1", worktree, status="done: also shipped", busy=True
+        )
+        outcome, signaller, _, _ = self.harness.run(bridge_tree(1000, worktree), mode="once")
+        self.assertEqual(decisions(outcome)[1000], ("refused", "owning-task-busy"))
+        self.assertEqual(signaller.sent, [])
+
+    def test_a_reused_slot_is_cleanable_only_when_every_claimant_finished(self) -> None:
+        worktree = self.harness.worktree("artist-archiver", slot=3)
+        self.harness.bind_session("ara8", 1000, 9884)
+        self.harness.task("previous-task-a1", worktree, status="done: shipped")
+        self.harness.task("current-task-a1", worktree, status="failed: gave up")
+        outcome, _, _, _ = self.harness.run(bridge_tree(1000, worktree))
+        self.assertEqual(decisions(outcome)[1000], ("eligible", "owning-task-completed"))
+
     def test_busy_flag_overrides_a_terminal_status(self) -> None:
         worktree = self.harness.worktree("money-monk")
         self.harness.bind_session("mm-a1", 1000, 10069)
