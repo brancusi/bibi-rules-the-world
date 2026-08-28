@@ -461,6 +461,31 @@ grep -Fq -- '--ignore-scripts' "$axi_dir/npm-calls.log" \
 grep -Fq 'chrome-devtools-axi@0.1.31' "$axi_dir/npm-calls.log" \
   || fail "AXI installation did not request the reviewed browser CLI pin"
 
+# The caller-supplied environment (the daily user's HOME and PATH) still reaches
+# the npm invocation now that the installer lives in its own task file.
+rm -f "$axi_root/chrome-devtools-axi/package.json"
+mkdir -p "$axi_dir/empty-bin"
+if BIBI_TEST_NPM_ROOT="$axi_root" BIBI_TEST_NPM_LOG="$axi_dir/npm-calls.log" \
+  ansible-playbook --inventory 'localhost,' "$root_dir/tests/fixtures/axi-tools-install.yml" \
+    --extra-vars "@$root_dir/group_vars/all.yml" \
+    --extra-vars "axi_install_user=$(id -un) axi_install_become=false" \
+    --extra-vars "{\"axi_environment\": {\"PATH\": \"$axi_dir/empty-bin\"}}" \
+    >"$axi_dir/environment-missing-npm.log" 2>&1; then
+  fail "AXI installation ignored the caller-supplied PATH environment"
+fi
+if ! BIBI_TEST_NPM_ROOT="$axi_root" BIBI_TEST_NPM_LOG="$axi_dir/npm-calls.log" \
+  ansible-playbook --inventory 'localhost,' "$root_dir/tests/fixtures/axi-tools-install.yml" \
+    --extra-vars "@$root_dir/group_vars/all.yml" \
+    --extra-vars "axi_install_user=$(id -un) axi_install_become=false" \
+    --extra-vars "{\"axi_environment\": {\"PATH\": \"$axi_bin:/usr/bin:/bin\"}}" \
+    >"$axi_dir/environment.log" 2>&1; then
+  echo "test failure: AXI installation with a supplied environment failed" >&2
+  tail -n 40 "$axi_dir/environment.log" >&2
+  exit 1
+fi
+[[ $(axi_installed_version) == 0.1.31 ]] \
+  || fail "supplied-environment AXI installation did not install chrome-devtools-axi 0.1.31"
+
 # An unpinned or moving specification must never reach npm.
 if PATH="$axi_bin:$PATH" BIBI_TEST_NPM_ROOT="$axi_root" BIBI_TEST_NPM_LOG="$axi_dir/npm-calls.log" \
   ansible-playbook --inventory 'localhost,' "$root_dir/tests/fixtures/axi-tools-install.yml" \

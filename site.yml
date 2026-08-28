@@ -300,7 +300,7 @@
       ansible.builtin.include_tasks: tasks/install-axi-tools.yml
       vars:
         axi_install_user: "{{ bibi_agent_user }}"
-      environment: *bibi_environment
+        axi_environment: *bibi_environment
 
     - name: Install pinned Wrangler without package lifecycle scripts
       become: true

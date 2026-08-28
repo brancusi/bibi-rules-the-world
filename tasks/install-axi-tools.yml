@@ -13,6 +13,7 @@
   become_user: "{{ axi_install_user }}"
   ansible.builtin.command:
     cmd: "npm install --global --ignore-scripts {{ axi_packages | join(' ') }}"
+  environment: "{{ axi_environment | default({}) }}"
   register: axi_install
   changed_when: >-
     'added' in axi_install.stdout
