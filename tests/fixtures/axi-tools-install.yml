@@ -1,0 +1,9 @@
+---
+- name: Exercise the pinned FirstMate AXI tool installer
+  hosts: all
+  connection: local
+  gather_facts: false
+
+  tasks:
+    - name: Install the pinned AXI tools
+      ansible.builtin.include_tasks: ../../tasks/install-axi-tools.yml

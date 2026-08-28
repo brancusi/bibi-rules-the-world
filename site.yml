@@ -296,17 +296,11 @@
       register: public_pi_packages_reconcile
       changed_when: "'reconciled' in public_pi_packages_reconcile.stdout"
 
-    - name: Install pinned FirstMate AXI tools without package lifecycle scripts
-      become: true
-      become_user: "{{ bibi_agent_user }}"
-      ansible.builtin.command:
-        cmd: "npm install --global --ignore-scripts {{ axi_packages | join(' ') }}"
-      environment: *bibi_environment
-      register: axi_install
-      changed_when: >-
-        'added' in axi_install.stdout
-        or 'changed' in axi_install.stdout
-        or 'removed' in axi_install.stdout
+    - name: Install pinned FirstMate AXI tools
+      ansible.builtin.include_tasks: tasks/install-axi-tools.yml
+      vars:
+        axi_install_user: "{{ bibi_agent_user }}"
+        axi_environment: *bibi_environment
 
     - name: Install pinned Wrangler without package lifecycle scripts
       become: true

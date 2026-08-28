@@ -1,0 +1,21 @@
+---
+- name: Refuse unpinned FirstMate AXI tool specifications
+  ansible.builtin.assert:
+    that:
+      - axi_packages | length > 0
+      - axi_packages | select('search', '@[0-9]+\.[0-9]+\.[0-9]+$') | list | length == axi_packages | length
+    fail_msg: "Every AXI tool must carry an exact reviewed npm version pin."
+
+# npm reconciles an absent, older, or newer global install to the reviewed pin
+# in one idempotent step; a host already at the pin reports no change.
+- name: Install pinned FirstMate AXI tools without package lifecycle scripts
+  become: "{{ axi_install_become | default(true) }}"
+  become_user: "{{ axi_install_user }}"
+  ansible.builtin.command:
+    cmd: "npm install --global --ignore-scripts {{ axi_packages | join(' ') }}"
+  environment: "{{ axi_environment | default({}) }}"
+  register: axi_install
+  changed_when: >-
+    'added' in axi_install.stdout
+    or 'changed' in axi_install.stdout
+    or 'removed' in axi_install.stdout
