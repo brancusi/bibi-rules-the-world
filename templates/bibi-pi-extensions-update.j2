@@ -2,6 +2,7 @@
 set -euo pipefail
 
 readonly package_source="{{ pi_extensions_repo_url }}@{{ pi_extensions_ref }}"
+export PI_CODING_AGENT_DIR="{{ bibi_pi_home }}"
 
 if ! gh auth status --hostname github.com >/dev/null 2>&1; then
   echo "GitHub authentication is required. Run 'gh auth login', then retry." >&2

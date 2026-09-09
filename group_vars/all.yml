@@ -7,12 +7,39 @@ bibi_admin_user: "bibi-admin"
 bibi_agent_user: "bibi"
 bibi_agent_home: "/home/bibi"
 
-# FirstMate is pinned so a rebuild does not silently change its operating rules.
-# Review upstream changes before replacing this commit.
+# Firstmate is pinned so a rebuild does not silently change its operating rules.
+# This audited 2026-09-09 commit is consumed unmodified. Existing clean
+# checkouts that advanced through Firstmate's guarded updater are never reset.
 firstmate_repo_url: "https://github.com/kunchenguid/firstmate.git"
-firstmate_ref: "673b6ad39d01183a19c5bd8a52675a2ee8ea06e6"
+firstmate_ref: "40c50ea8843c5b6a5351db8352675537252b653e"
+herdr_version: "0.7.4"
+treehouse_version: "2.0.1"
+firstmate_source_root: "{{ bibi_agent_home }}/.local/share/firstmate/source"
+firstmate_source_dir: "{{ firstmate_source_root }}/{{ firstmate_ref }}"
+firstmate_instance_home: "{{ bibi_agent_home }}/.local/share/firstmate/instances/main"
+bibi_pi_home: "{{ firstmate_instance_home }}/pi"
+bibi_receipt_path: "{{ bibi_agent_home }}/.local/state/bibi/provisioned-versions"
+
+# Existing cloud-init and direct Ansible runs retain the former complete tool
+# set through this explicit compatibility profile. The portable dispatcher can
+# instead pass a smaller reviewed profile set.
+bibi_profiles:
+  - "ubuntu-compat"
+bibi_supported_profiles:
+  - "base"
+  - "ubuntu-compat"
+  - "public-pi-extras"
+  - "private-capabilities"
+  - "cloudflare"
+  - "digitalocean"
+  - "web-research"
+  - "clojure"
+  - "browser"
+bibi_backend: "herdr"
 
 node_major: 24
+node_version: "24.18.0"
+node_darwin_arm64_sha256: "e1a97e14c99c803e96c7339403282ea05a499c32f8d83defe9ef5ec66f979ed1"
 nodesource_key_sha256: "b42e0321dabdc24e892115da705cf061167eac12a317f23d329862d0aa0a271d"
 
 # Official immutable releases reviewed on 2026-08-26. Java and Clojure live
@@ -34,6 +61,7 @@ jdk_archives:
   aarch64:
     arch: "aarch64"
     sha256: "eba38e871b02d407897bfe017ea35352dfc1420ef6d2112425b0c67325ca509d"
+jdk_darwin_arm64_sha256: "021d629349ebc12a409faa517b837ec80ceee8f58a5ac85c788ecad07ca6881c"
 clojure_cli_version: "1.12.4.1618"
 clojure_cli_release_base_url: "https://download.clojure.org/install"
 clojure_cli_sha256: "13769da6d63a98deb2024378ae1a64e4ee211ac1035340dfca7a6944c41cde21"
@@ -43,30 +71,56 @@ clojure_cli_sha256: "13769da6d63a98deb2024378ae1a64e4ee211ac1035340dfca7a6944c41
 # chrome-devtools-axi moved to the Captain-approved 0.1.31 on 2026-08-28,
 # verified through the same trusted registry path the installer uses
 # (`npm view chrome-devtools-axi@0.1.31 name version dist.integrity`).
-pi_version: "0.83.0"
+pi_version: "0.85.1"
+pi_integrity: "sha512-FGRN+OHbWaefBPGaTggAdLjrIHW+s2PzLyglz/5dfLzb9of7uuXMXYC0fJIeZTw+shS32o2cuQ9jF7YSDuL/oQ=="
 wrangler_package: "wrangler@4.125.0"
+wrangler_integrity: "sha512-yFpvggu+xk1Hdm/Uxwaqa19bb7GArME4CrCS3Vov68a2TZq2MPO+wLocKbbnIC9K0oLowcdau7/ycxbbNHKCEg=="
 firecrawl_cli_package: "firecrawl-cli@1.19.27"
+firecrawl_cli_integrity: "sha512-ZbQrtRzaN3PIQmpYJSh10sabZmXXVWcZk0aNc5i2hzVs1vH0lFHaLzkmMTNE+ZjiuZ4w9rpM7377xF2DpVI9zQ=="
 axi_packages:
   - "gh-axi@0.1.30"
   - "chrome-devtools-axi@0.1.31"
   - "lavish-axi@0.1.50"
   - "tasks-axi@0.2.5"
   - "quota-axi@0.1.29"
+gh_axi_integrity: "sha512-4qw7+INJqdH5obm6NOUQnqBRALMG/BYQwTseVr9I7DHvccEytBtltc0EvB0SxrDzIUTKPshI9uKtfp83TjlBjA=="
+chrome_devtools_axi_integrity: "sha512-vAl0cOYpjC5yG70ZUKl8AQkOAMiB/73NjWeDxzbQt20uRCXwQIGSPFR05Kuued7ClC2+DRgCMacCBxF48MCxyw=="
+lavish_axi_integrity: "sha512-w57Pdna5MmsgHTewyhOPkuzwbCe98WqR6yrvf/r+fxs1qor2ypHzeHD10H6V5n4qJMKosBClcK9M0QzmrbaoHA=="
+tasks_axi_integrity: "sha512-FxssEW7+MuUNHWJ7uhdGrRsBDev/Zw5NutUBHcf8r/npG6z9+NfUUIeXdcdDHrC9ixEKOqQ9Uomay2TLpDB6Eg=="
+quota_axi_integrity: "sha512-RTuWSwKy8SseMxg1enIaNu6PPV2YTjEZVvYTRLkB2rIa5PJs8cgr/6rCWZsbr7cEePEp9VFImb75UXS3+T3f/g=="
 
 # Public Pi packages are reconciled through Pi's official package installer as
 # the daily user. Exact npm versions are retained in Pi settings.
 pi_public_packages:
   - "npm:@tmustier/pi-files-widget@0.2.0"
   - "npm:pi-web-access@0.24.0"
+pi_files_widget_integrity: "sha512-LtCczKU7wl7PqwfIDvjshDKVNH14FYfwK4SqIhlhH5hY4YAQPc97NF6eP5WTxoH1nZKIAtNFyX/8qk39EnJ8+g=="
+pi_web_access_integrity: "sha512-BVosva1tGDhHveaGpFnc++YS5+pzmWVzJ/5B+1xBavkRjAgyDvMpA1EfVL+GYIviAxXKck9JyRGVzo4ASV7snA=="
 
 # Official Cloudflare agent skills reviewed at this verified upstream commit.
-# Only these two skills are linked into Pi; the source checkout remains pinned.
+# Ubuntu compatibility retains the original two; the macOS opt-in profile
+# exposes the expanded reviewed set. The source checkout remains pinned.
 cloudflare_skills_repo_url: "https://github.com/cloudflare/skills.git"
 cloudflare_skills_ref: "f96bff754e428838818017f75817f0f9428acd48"
 cloudflare_skills_checkout: "{{ bibi_agent_home }}/.local/share/bibi/cloudflare-skills"
-cloudflare_skill_link_dir: "{{ bibi_agent_home }}/.pi/agent/skills"
+cloudflare_skill_link_dir: "{{ bibi_pi_home }}/skills"
 cloudflare_skill_names:
   - "cloudflare"
+  - "wrangler"
+portable_cloudflare_skill_names:
+  - "agents-sdk"
+  - "cloudflare"
+  - "cloudflare-email-service"
+  - "cloudflare-one"
+  - "cloudflare-one-migrations"
+  - "durable-objects"
+  - "sandbox-migrate-to-next"
+  - "sandbox-next"
+  - "sandbox-stable"
+  - "turnstile-spin"
+  - "web-perf"
+  - "web-research"
+  - "workers-best-practices"
   - "wrangler"
 
 # Official immutable release artifacts reviewed on 2026-08-01. The private
@@ -85,24 +139,26 @@ doctl_archives:
   aarch64:
     arch: "arm64"
     sha256: "a9857d2ef4498f6affb9baae2b37b890ccc4ddda9ec01e58b63a2e99e47eb363"
+doctl_darwin_arm64_sha256: "b139cd5ca9f2215842dd4adcdf2a088cda4a629cc475598fa55a4187878cb832"
 
 # This private collection is intentionally not fetched by cloud-init/Ansible.
 # After `gh auth login`, the daily user runs bibi-pi-extensions-update. The
-# merged collection at this commit requires Node.js 22+, Pi 0.83.0-compatible,
+# merged collection at this commit requires Node.js 22+ and was exercised with Pi 0.85.1,
 # official doctl 1.165.0+ (1.x), and the pi-ai, coding-agent, pi-tui, and
 # typebox core peers supplied by Pi.
 pi_extensions_repo_url: "https://github.com/brancusi/pi-extensions.git"
 pi_extensions_ref: "c66061fd372ad36e4ffbf61c41fb92dd1d2d9152"
 pi_extensions_package_version: "1.5.0"
 
-no_mistakes_version: "1.40.0"
+no_mistakes_version: "1.60.2"
 no_mistakes_archives:
   x86_64:
     arch: "amd64"
-    sha256: "2445b65179d0e8e9bbf408322f57190f344f9946cfed3971c84fa16ce4122e91"
+    sha256: "ebf46d1c8107ec51e92b60ddb4d123df53f4bc6f193c024a5a1793eef4850b89"
   aarch64:
     arch: "arm64"
-    sha256: "e679370ccfe20e3028c59ed984510e7077996a0d17b8dc196e5b199218f1db9d"
+    sha256: "deed694ff48ca243ff197ecfaf05bf6a8673618742ffe379697b0304f42b57e4"
+no_mistakes_darwin_arm64_sha256: "a7c88b1ab2fba96b30ccc64ca3e95676ae3c3d8625a32d3e74cc2461621ab54a"
 
 # Memory safety net, reviewed 2026-08-28 after repeated browser QA left
 # reparented chrome-devtools-axi bridges, chrome-devtools-mcp processes, their
@@ -128,7 +184,7 @@ memory_guard_lock_file: "/run/bibi-memory-guard/run.lock"
 # Ownership oracles. A leaked tree is only cleaned when these prove the owning
 # worktree finished or disappeared; every name here is protective only.
 memory_guard_axi_state_dir: "{{ bibi_agent_home }}/.chrome-devtools-axi"
-memory_guard_firstmate_state_dir: "{{ bibi_agent_home }}/firstmate/state"
+memory_guard_firstmate_state_dir: "{{ firstmate_instance_home }}/state"
 memory_guard_worktree_root: "{{ bibi_agent_home }}/.treehouse"
 memory_guard_owner_commands:
   - "claude"

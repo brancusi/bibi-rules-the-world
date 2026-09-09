@@ -1,0 +1,53 @@
+#!/usr/bin/env bash
+# Authenticated opt-in installer for a caller-owned private exact-ref manifest.
+set -euo pipefail
+
+mode=${1:-}
+manifest=${2:-}
+if [[ "$mode" != --plan && "$mode" != --apply ]] || [[ -z "$manifest" ]]; then
+  echo "usage: bibi-private-capabilities-update --plan|--apply MANIFEST" >&2
+  exit 2
+fi
+[[ -f "$manifest" && ! -L "$manifest" ]] || { echo "manifest must be a regular non-symlink file" >&2; exit 1; }
+manifest_size=$(wc -c < "$manifest" | tr -d '[:space:]')
+[[ "$manifest_size" =~ ^[0-9]+$ && "$manifest_size" -le 65536 ]] \
+  || { echo "manifest must not exceed 65536 bytes" >&2; exit 1; }
+
+sources=()
+schema_seen=false
+seen_sources='|'
+while IFS= read -r line || [[ -n "$line" ]]; do
+  case "$line" in ''|'#'*) continue ;; esac
+  if [[ "$line" == schema=bibi-private-capabilities.v1 ]]; then
+    [[ "$schema_seen" == false ]] || { echo "duplicate manifest schema" >&2; exit 1; }
+    schema_seen=true
+    continue
+  fi
+  if [[ "$line" =~ ^source=git:https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+\.git@([0-9a-f]{40})$ ]]; then
+    source=${line#source=}
+    ((${#sources[@]} < 32)) || { echo "private manifest exceeds 32 sources" >&2; exit 1; }
+    [[ "$seen_sources" != *"|$source|"* ]] || { echo "duplicate private manifest source" >&2; exit 1; }
+    sources+=("$source")
+    seen_sources+="$source|"
+  else
+    echo "manifest accepts only exact source=git:https://github.com/ORG/REPO.git@<40-hex-commit> rows" >&2
+    exit 1
+  fi
+done < "$manifest"
+[[ "$schema_seen" == true ]] || { echo "missing schema=bibi-private-capabilities.v1" >&2; exit 1; }
+((${#sources[@]} > 0)) || { echo "private manifest contains no sources" >&2; exit 1; }
+
+printf 'Private Pi home: %s\n' "{{ bibi_pi_home }}"
+printf 'Exact reviewed sources:\n'
+printf '  %s\n' "${sources[@]}"
+[[ "$mode" == --apply ]] || { echo "plan only; no authentication or files changed"; exit 0; }
+
+# Authentication is checked before gh setup or Pi can mutate anything. GitHub's
+# existing credential helper supplies access; no token is accepted in argv,
+# this manifest, or the environment by this command.
+gh auth status >/dev/null 2>&1 || { echo "run 'gh auth login' as this user before apply" >&2; exit 1; }
+gh auth setup-git >/dev/null
+for source in "${sources[@]}"; do
+  GIT_TERMINAL_PROMPT=0 PI_CODING_AGENT_DIR="{{ bibi_pi_home }}" pi install "$source"
+done
+echo "private capabilities reconciled at exact refs"

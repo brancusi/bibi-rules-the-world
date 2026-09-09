@@ -13,13 +13,16 @@
           - ansible_distribution_version is version('24.04', '>=')
         fail_msg: "This playbook targets Ubuntu 24.04 LTS or newer."
 
-    - name: Refuse unsupported CPU architectures
+    - name: Refuse unsupported CPU architectures and profile selections
       ansible.builtin.assert:
         that:
           - ansible_architecture in no_mistakes_archives
           - ansible_architecture in doctl_archives
           - ansible_architecture in jdk_archives
-        fail_msg: "Supported architectures are x86_64 and aarch64."
+          - bibi_backend in ['herdr', 'tmux']
+          - bibi_profiles | length > 0
+          - bibi_profiles | difference(bibi_supported_profiles) | length == 0
+        fail_msg: "Supported architectures are x86_64/aarch64; backend and profiles must be reviewed portable values."
 
   tasks:
     - name: Install base development and security packages
@@ -42,6 +45,7 @@
           - ripgrep
           - rlwrap
           - shellcheck
+          - tmux
           - unattended-upgrades
           - unzip
           - ufw
@@ -184,9 +188,11 @@
 
     - name: Install and verify the shared JDK and Clojure CLI
       ansible.builtin.include_tasks: tasks/install-shared-clojure-toolchain.yml
+      when: "'ubuntu-compat' in bibi_profiles or 'clojure' in bibi_profiles"
 
     - name: Install and verify the pinned official doctl release
       ansible.builtin.include_tasks: tasks/install-doctl.yml
+      when: "'ubuntu-compat' in bibi_profiles or 'digitalocean' in bibi_profiles"
 
     - name: Download the pinned NodeSource signing key
       ansible.builtin.get_url:
@@ -223,6 +229,39 @@
         dest: /usr/local/bin/fd
         state: link
 
+    - name: Inspect the user-owned installation directory chain
+      ansible.builtin.stat:
+        path: "{{ item }}"
+        follow: false
+      loop:
+        - "{{ bibi_agent_home }}"
+        - "{{ bibi_agent_home }}/.local"
+        - "{{ bibi_agent_home }}/.local/bin"
+        - "{{ bibi_agent_home }}/.local/lib"
+        - "{{ bibi_agent_home }}/.local/lib/node_modules"
+        - "{{ bibi_agent_home }}/.local/share"
+        - "{{ bibi_agent_home }}/.local/share/bibi"
+        - "{{ cloudflare_skills_checkout }}"
+        - "{{ bibi_agent_home }}/.local/share/firstmate"
+        - "{{ firstmate_source_root }}"
+        - "{{ bibi_agent_home }}/.local/share/firstmate/instances"
+        - "{{ firstmate_instance_home }}"
+        - "{{ firstmate_instance_home }}/config"
+        - "{{ bibi_pi_home }}"
+        - "{{ bibi_pi_home }}/extensions"
+        - "{{ bibi_agent_home }}/.local/state"
+        - "{{ bibi_receipt_path | dirname }}"
+      register: bibi_user_install_paths
+
+    - name: Refuse redirected or non-directory installation paths
+      ansible.builtin.assert:
+        that:
+          - not item.stat.exists or (item.stat.isdir and not item.stat.islnk)
+        fail_msg: "Installation path {{ item.item }} must be a direct directory, not a symlink or another file type."
+      loop: "{{ bibi_user_install_paths.results }}"
+      loop_control:
+        label: "{{ item.item }}"
+
     - name: Create Bibi's local executable directory
       ansible.builtin.file:
         path: "{{ bibi_agent_home }}/.local/bin"
@@ -230,6 +269,44 @@
         owner: "{{ bibi_agent_user }}"
         group: "{{ bibi_agent_user }}"
         mode: "0755"
+
+    - name: Record whether this is a fresh Firstmate instance
+      ansible.builtin.stat:
+        path: "{{ firstmate_instance_home }}"
+        follow: false
+      register: firstmate_instance_before_creation
+
+    - name: Create the isolated Pi home before package reconciliation
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        owner: "{{ bibi_agent_user }}"
+        group: "{{ bibi_agent_user }}"
+        mode: "0700"
+      loop:
+        - "{{ firstmate_instance_home }}"
+        - "{{ firstmate_instance_home }}/config"
+        - "{{ bibi_pi_home }}"
+        - "{{ bibi_pi_home }}/extensions"
+
+    - name: Inspect user configuration files before reconciliation
+      ansible.builtin.stat:
+        path: "{{ item }}"
+        follow: false
+      loop:
+        - "{{ bibi_agent_home }}/.npmrc"
+        - "{{ bibi_agent_home }}/.profile"
+        - "{{ bibi_agent_home }}/.bashrc"
+      register: bibi_user_config_paths
+
+    - name: Refuse redirected or non-regular user configuration files
+      ansible.builtin.assert:
+        that:
+          - not item.stat.exists or (item.stat.isreg and not item.stat.islnk)
+        fail_msg: "User configuration {{ item.item }} must be a direct regular file."
+      loop: "{{ bibi_user_config_paths.results }}"
+      loop_control:
+        label: "{{ item.item }}"
 
     - name: Configure user-owned npm global installs
       ansible.builtin.copy:
@@ -272,6 +349,7 @@
         cmd: "npm install --global --ignore-scripts @earendil-works/pi-coding-agent@{{ pi_version }}"
       environment: &bibi_environment
         HOME: "{{ bibi_agent_home }}"
+        PI_CODING_AGENT_DIR: "{{ bibi_pi_home }}"
         PATH: "{{ bibi_agent_home }}/.local/bin:/usr/local/bin:/usr/bin:/bin"
       register: pi_install
       changed_when: >-
@@ -295,6 +373,10 @@
       environment: *bibi_environment
       register: public_pi_packages_reconcile
       changed_when: "'reconciled' in public_pi_packages_reconcile.stdout"
+      when: >-
+        'ubuntu-compat' in bibi_profiles
+        or 'public-pi-extras' in bibi_profiles
+        or 'web-research' in bibi_profiles
 
     - name: Install pinned FirstMate AXI tools
       ansible.builtin.include_tasks: tasks/install-axi-tools.yml
@@ -313,6 +395,7 @@
         'added' in wrangler_install.stdout
         or 'changed' in wrangler_install.stdout
         or 'removed' in wrangler_install.stdout
+      when: "'ubuntu-compat' in bibi_profiles or 'cloudflare' in bibi_profiles"
 
     - name: Install pinned Firecrawl CLI without package lifecycle scripts
       become: true
@@ -325,11 +408,13 @@
         'added' in firecrawl_cli_install.stdout
         or 'changed' in firecrawl_cli_install.stdout
         or 'removed' in firecrawl_cli_install.stdout
+      when: "'ubuntu-compat' in bibi_profiles or 'web-research' in bibi_profiles"
 
     - name: Install the reviewed official Cloudflare skills
       ansible.builtin.include_tasks: tasks/install-cloudflare-skills.yml
       vars:
         cloudflare_skills_owner: "{{ bibi_agent_user }}"
+      when: "'ubuntu-compat' in bibi_profiles or 'cloudflare' in bibi_profiles"
 
     - name: Install AXI hooks
       become: true
@@ -342,55 +427,240 @@
       environment: *bibi_environment
       changed_when: false
 
-    - name: Clone the pinned FirstMate distro
+    - name: Exercise the opt-in browser with a disposable local page
       become: true
       become_user: "{{ bibi_agent_user }}"
-      ansible.builtin.git:
-        repo: "{{ firstmate_repo_url }}"
-        dest: "{{ bibi_agent_home }}/firstmate"
-        version: "{{ firstmate_ref }}"
-        update: true
-        force: false
+      ansible.builtin.shell: |
+        set -euo pipefail
+        browser=$(command -v google-chrome-stable || command -v google-chrome || command -v chromium || command -v chromium-browser)
+        profile=$(mktemp -d /tmp/bibi-browser-smoke.XXXXXX)
+        trap 'rm -rf "$profile"' EXIT
+        timeout 30s "$browser" --headless --disable-gpu --disable-background-networking \
+          --disable-component-update --disable-sync --metrics-recording-only --no-first-run \
+          --no-default-browser-check --safebrowsing-disable-auto-update \
+          --user-data-dir="$profile/user-data" --dump-dom \
+          'data:text/html,<title>bibi-browser-smoke</title><p>bibi-browser-smoke</p>' \
+          >"$profile/output" 2>"$profile/errors"
+        grep -q bibi-browser-smoke "$profile/output"
+      args:
+        executable: /bin/bash
+      environment: *bibi_environment
+      changed_when: false
+      when: "'browser' in bibi_profiles"
 
-    - name: Create FirstMate's local configuration directory
+    - name: Create the pinned Firstmate source root
       ansible.builtin.file:
-        path: "{{ bibi_agent_home }}/firstmate/config"
+        path: "{{ firstmate_source_root }}"
         state: directory
         owner: "{{ bibi_agent_user }}"
         group: "{{ bibi_agent_user }}"
         mode: "0755"
 
-    - name: Select Herdr as FirstMate's backend
-      ansible.builtin.copy:
-        dest: "{{ bibi_agent_home }}/firstmate/config/backend"
-        owner: "{{ bibi_agent_user }}"
-        group: "{{ bibi_agent_user }}"
-        mode: "0644"
-        content: "herdr\n"
+    - name: Inspect the immutable-named Firstmate source path
+      ansible.builtin.stat:
+        path: "{{ firstmate_source_dir }}"
+        follow: false
+      register: firstmate_source_path
 
-    - name: Select Pi as FirstMate's crew harness
-      ansible.builtin.copy:
-        dest: "{{ bibi_agent_home }}/firstmate/config/crew-harness"
+    - name: Inspect the immutable-named Firstmate checkout
+      ansible.builtin.stat:
+        path: "{{ firstmate_source_dir }}/.git"
+        follow: false
+      register: firstmate_checkout
+
+    - name: Refuse a partial or redirected Firstmate source path
+      ansible.builtin.assert:
+        that:
+          - >-
+            not firstmate_source_path.stat.exists
+            or (firstmate_source_path.stat.isdir and not firstmate_source_path.stat.islnk)
+          - >-
+            not firstmate_source_path.stat.exists
+            or (firstmate_checkout.stat.exists and firstmate_checkout.stat.isdir and not firstmate_checkout.stat.islnk)
+        fail_msg: "The Firstmate source path is partial, non-directory, or symlinked; inspect it before retrying."
+
+    # Clone once at the reviewed commit. Firstmate's guarded /updatefirstmate may
+    # advance this clean checkout later; ordinary machine reconciliation never
+    # resets it to an older installer pin.
+    - name: Clone the reviewed Firstmate distro when absent
+      become: true
+      become_user: "{{ bibi_agent_user }}"
+      ansible.builtin.git:
+        repo: "{{ firstmate_repo_url }}"
+        dest: "{{ firstmate_source_dir }}"
+        version: "{{ firstmate_ref }}"
+        update: false
+        force: false
+      when: not firstmate_checkout.stat.exists
+
+    - name: Read the active Firstmate commit
+      become: true
+      become_user: "{{ bibi_agent_user }}"
+      ansible.builtin.command:
+        argv: [git, -C, "{{ firstmate_source_dir }}", rev-parse, HEAD]
+      register: firstmate_active_commit
+      changed_when: false
+
+    - name: Verify the Firstmate source remote
+      become: true
+      become_user: "{{ bibi_agent_user }}"
+      ansible.builtin.command:
+        argv: [git, -C, "{{ firstmate_source_dir }}", remote, get-url, origin]
+      register: firstmate_active_origin
+      changed_when: false
+      failed_when: firstmate_active_origin.stdout != firstmate_repo_url
+
+    - name: Verify the Firstmate source is clean
+      become: true
+      become_user: "{{ bibi_agent_user }}"
+      ansible.builtin.command:
+        argv: [git, -C, "{{ firstmate_source_dir }}", status, --porcelain, --untracked-files=all]
+      register: firstmate_active_status
+      changed_when: false
+      failed_when: firstmate_active_status.stdout | length > 0
+
+    - name: Verify Firstmate is the pin or a guarded descendant
+      become: true
+      become_user: "{{ bibi_agent_user }}"
+      ansible.builtin.command:
+        argv: [git, -C, "{{ firstmate_source_dir }}", merge-base, --is-ancestor, "{{ firstmate_ref }}", "{{ firstmate_active_commit.stdout }}"]
+      changed_when: false
+
+    - name: Create the independent Firstmate and Pi configuration directories
+      ansible.builtin.file:
+        path: "{{ item.path }}"
+        state: directory
         owner: "{{ bibi_agent_user }}"
         group: "{{ bibi_agent_user }}"
-        mode: "0644"
+        mode: "{{ item.mode }}"
+      loop:
+        - {path: "{{ firstmate_instance_home }}", mode: "0700"}
+        - {path: "{{ firstmate_instance_home }}/config", mode: "0700"}
+        - {path: "{{ bibi_pi_home }}", mode: "0700"}
+        - {path: "{{ bibi_pi_home }}/extensions", mode: "0700"}
+
+    - name: Inspect existing Firstmate selection files
+      ansible.builtin.stat:
+        path: "{{ item }}"
+        follow: false
+      loop:
+        - "{{ firstmate_instance_home }}/config/backend"
+        - "{{ firstmate_instance_home }}/config/crew-harness"
+      register: firstmate_selection_paths
+
+    - name: Refuse redirected or non-regular Firstmate selection files
+      ansible.builtin.assert:
+        that:
+          - not item.stat.exists or (item.stat.isreg and not item.stat.islnk)
+        fail_msg: "Firstmate selection {{ item.item }} must be a direct regular file."
+      loop: "{{ firstmate_selection_paths.results }}"
+      loop_control:
+        label: "{{ item.item }}"
+
+    - name: Select the reviewed Firstmate backend for a fresh home
+      ansible.builtin.copy:
+        dest: "{{ firstmate_instance_home }}/config/backend"
+        owner: "{{ bibi_agent_user }}"
+        group: "{{ bibi_agent_user }}"
+        mode: "0600"
+        content: "{{ bibi_backend }}\n"
+        force: false
+
+    - name: Select Pi as Firstmate's crew harness for a fresh home
+      ansible.builtin.copy:
+        dest: "{{ firstmate_instance_home }}/config/crew-harness"
+        owner: "{{ bibi_agent_user }}"
+        group: "{{ bibi_agent_user }}"
+        mode: "0600"
         content: "pi\n"
+        force: false
 
-    - name: Install FirstMate's checksum-pinned Herdr build
+    - name: Verify existing instance selections were not silently replaced
+      become: true
+      become_user: "{{ bibi_agent_user }}"
+      ansible.builtin.shell: >-
+        test "$(head -n 1 {{ firstmate_instance_home | quote }}/config/backend)" = {{ bibi_backend | quote }} &&
+        test "$(head -n 1 {{ firstmate_instance_home | quote }}/config/crew-harness)" = pi
+      args:
+        executable: /bin/bash
+      changed_when: false
+
+    - name: Install Firstmate's checksum-pinned Herdr build
       become: true
       become_user: "{{ bibi_agent_user }}"
       ansible.builtin.command:
-        cmd: "{{ bibi_agent_home }}/firstmate/bin/fm-install-herdr.sh {{ bibi_agent_home }}/.local/bin"
+        cmd: "{{ firstmate_source_dir }}/bin/fm-install-herdr.sh {{ bibi_agent_home }}/.local/bin"
       environment: *bibi_environment
       changed_when: false
+      when: bibi_backend == 'herdr'
 
-    - name: Install FirstMate's checksum-pinned Treehouse build
+    - name: Install Firstmate's checksum-pinned Treehouse build
       become: true
       become_user: "{{ bibi_agent_user }}"
       ansible.builtin.command:
-        cmd: "{{ bibi_agent_home }}/firstmate/bin/fm-install-treehouse.sh {{ bibi_agent_home }}/.local/bin"
+        cmd: "{{ firstmate_source_dir }}/bin/fm-install-treehouse.sh {{ bibi_agent_home }}/.local/bin"
       environment: *bibi_environment
       changed_when: false
+
+    - name: Inspect the official Herdr Pi lifecycle integration
+      ansible.builtin.stat:
+        path: "{{ bibi_pi_home }}/extensions/herdr-agent-state.ts"
+      register: herdr_pi_integration
+      when: bibi_backend == 'herdr'
+
+    - name: Refuse a redirected or non-regular Herdr Pi lifecycle integration
+      ansible.builtin.assert:
+        that:
+          - >-
+            not herdr_pi_integration.stat.exists
+            or (herdr_pi_integration.stat.isreg and not herdr_pi_integration.stat.islnk)
+        fail_msg: "Existing Herdr Pi integration must be a direct regular file."
+      when: bibi_backend == 'herdr'
+
+    - name: Install the official Herdr Pi lifecycle integration only when absent
+      become: true
+      become_user: "{{ bibi_agent_user }}"
+      ansible.builtin.command:
+        argv: [herdr, integration, install, pi]
+      environment: *bibi_environment
+      changed_when: true
+      when:
+        - bibi_backend == 'herdr'
+        - not herdr_pi_integration.stat.exists
+
+    - name: Verify the Herdr Pi lifecycle integration is current
+      become: true
+      become_user: "{{ bibi_agent_user }}"
+      ansible.builtin.shell: >-
+        set -o pipefail && herdr integration status |
+        grep -q '^pi: current '
+      args:
+        executable: /bin/bash
+      environment: *bibi_environment
+      changed_when: false
+      when: bibi_backend == 'herdr'
+
+    - name: Inspect forbidden pre-launch Pi state after public reconciliation
+      ansible.builtin.stat:
+        path: "{{ bibi_pi_home }}/{{ item }}"
+        follow: false
+      loop:
+        - auth.json
+        - models-store.json
+        - trust.json
+        - sessions
+      register: firstmate_fresh_pi_state
+      when: not firstmate_instance_before_creation.stat.exists
+
+    - name: Require a fresh installer to leave auth, trust, and sessions absent
+      ansible.builtin.assert:
+        that:
+          - not item.stat.exists
+        fail_msg: "Fresh installer created forbidden pre-launch Pi state at {{ item.item }}."
+      loop: "{{ firstmate_fresh_pi_state.results | default([]) }}"
+      loop_control:
+        label: "{{ item.item | default('skipped') }}"
+      when: not firstmate_instance_before_creation.stat.exists
 
     - name: Set no-mistakes release facts
       ansible.builtin.set_fact:
@@ -434,18 +704,29 @@
         group: "{{ bibi_agent_user }}"
         mode: "0755"
 
-    - name: Install the verification command
+    - name: Install the verifier dispatcher and Linux implementation
       ansible.builtin.copy:
-        src: scripts/verify.sh
-        dest: "{{ bibi_agent_home }}/.local/bin/bibi-verify"
+        src: "{{ item.src }}"
+        dest: "{{ bibi_agent_home }}/.local/bin/{{ item.dest }}"
+        owner: "{{ bibi_agent_user }}"
+        group: "{{ bibi_agent_user }}"
+        mode: "0755"
+      loop:
+        - {src: scripts/verify.sh, dest: bibi-verify}
+        - {src: scripts/verify-linux.sh, dest: verify-linux.sh}
+
+    - name: Install the legacy private Pi collection bootstrap and update command
+      ansible.builtin.template:
+        src: templates/bibi-pi-extensions-update.j2
+        dest: "{{ bibi_agent_home }}/.local/bin/bibi-pi-extensions-update"
         owner: "{{ bibi_agent_user }}"
         group: "{{ bibi_agent_user }}"
         mode: "0755"
 
-    - name: Install the private Pi collection bootstrap and update command
+    - name: Install the generic authenticated private capability command
       ansible.builtin.template:
-        src: templates/bibi-pi-extensions-update.j2
-        dest: "{{ bibi_agent_home }}/.local/bin/bibi-pi-extensions-update"
+        src: templates/bibi-private-capabilities-update.j2
+        dest: "{{ bibi_agent_home }}/.local/bin/bibi-private-capabilities-update"
         owner: "{{ bibi_agent_user }}"
         group: "{{ bibi_agent_user }}"
         mode: "0755"
@@ -472,13 +753,29 @@
     - name: Install the memory guard service and timer
       ansible.builtin.include_tasks: tasks/install-memory-guard.yml
 
-    - name: Record the provisioned versions
+    - name: Create the daily-user receipt directory
+      ansible.builtin.file:
+        path: "{{ bibi_receipt_path | dirname }}"
+        state: directory
+        owner: "{{ bibi_agent_user }}"
+        group: "{{ bibi_agent_user }}"
+        mode: "0700"
+
+    - name: Record the root-readable provisioned versions
       ansible.builtin.template:
         src: templates/provisioned-versions.j2
         dest: /etc/bibi-provisioned-versions
         owner: root
         group: root
         mode: "0644"
+
+    - name: Record a daily-user non-secret provisioning receipt
+      ansible.builtin.template:
+        src: templates/provisioned-versions.j2
+        dest: "{{ bibi_receipt_path }}"
+        owner: "{{ bibi_agent_user }}"
+        group: "{{ bibi_agent_user }}"
+        mode: "0600"
 
   handlers:
     - name: Validate and reload SSH

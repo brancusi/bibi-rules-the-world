@@ -3,11 +3,164 @@
 > A remote laboratory for creative, exploratory, mind-bending agentic coding.
 > We bend assumptions, not isolation boundaries.
 
-This repository turns a clean DigitalOcean Ubuntu 24.04 Droplet into a
-persistent FirstMate machine. Your Mac runs only WezTerm and OpenSSH. Node,
-Pi, Herdr, FirstMate, source code, builds, and credentials stay on the Droplet.
+This repository provisions a reusable, isolated Firstmate installation on
+Ubuntu 24.04 or native Apple Silicon macOS. The long-standing DigitalOcean
+cloud-init path remains supported. Native macOS support is **provisional**
+until the real Mac Mini acceptance receipt below is completed; Linux mocks and
+hosted CI do not establish login, FileVault, sleep/wake, or launchd behavior.
 
-## What this builds
+## Portable entry point
+
+Plan is read-only and is the default. Apply must be explicit:
+
+```bash
+git clone https://github.com/brancusi/bibi-rules-the-world.git
+cd bibi-rules-the-world
+./bin/bibi-setup --plan --backend herdr
+./bin/bibi-setup --apply --backend herdr
+```
+
+The dispatcher accepts Ubuntu 24.04+ on x86_64/aarch64 and native
+`Darwin-arm64`. It clearly refuses Intel macOS and unknown platforms. On Ubuntu,
+an omitted profile selects `ubuntu-compat`, preserving the repository's former
+complete tool set. On macOS, an omitted profile selects the smaller `base`.
+Repeat `--profile` to opt into capabilities:
+
+| Profile | Contents |
+| --- | --- |
+| `base` | Node, Git/GitHub CLI, Pi, Firstmate, no-mistakes, required AXI tools, Treehouse, tmux, and the selected backend |
+| `ubuntu-compat` | Historical Ubuntu defaults: base plus all formerly installed public/provider/language tools and host safety policy |
+| `public-pi-extras` | Pinned files widget and pi-web-access packages |
+| `cloudflare` | Pinned Wrangler and the selected skills from the reviewed official Cloudflare checkout |
+| `digitalocean` | Checksum-pinned doctl; authentication is separate |
+| `web-research` | Pinned Firecrawl CLI and pi-web-access |
+| `clojure` | Checksum-pinned Temurin 21 and Clojure CLI |
+| `browser` | Existing reviewed Chrome/Chromium plus a disposable local-page smoke; no floating browser install |
+| `private-capabilities` | Caller-owned authenticated exact-ref manifest; never credentials or copied package contents |
+
+The setup creates separate code and operating roots:
+
+```text
+Firstmate code  ~/.local/share/firstmate/source/<reviewed-commit>/
+FM_HOME         ~/.local/share/firstmate/instances/main/
+Pi home         ~/.local/share/firstmate/instances/main/pi/
+Treehouse pool  ~/.local/share/firstmate/instances/main/treehouse/
+user commands   ~/.local/bin/
+receipt         ~/.local/state/bibi/provisioned-versions
+```
+
+`bibi` exports the exact `FM_HOME`, `PI_CODING_AGENT_DIR`, and isolated
+`TREEHOUSE_DIR`, changes to the reviewed Firstmate source, and starts Pi. A
+rerun does not reset an existing home, backend choice, grants, settings,
+projects, profiles, auth, trust, or
+sessions. A clean Firstmate checkout advanced by the guarded upstream updater
+is accepted as a descendant and is never reset to the older installer floor.
+
+No setup path imports another instance's projects, backlog, task state, locks,
+secondmate records, provider credentials, GitHub/cloud credentials, Pi
+`auth.json`, `trust.json`, sessions, or package checkout tree. Pi project trust
+is local input approval, not a sandbox: package extensions execute with the
+full authority of the daily user. Review the exact clone before accepting its
+trust prompt.
+
+## Native Apple Silicon macOS (provisional)
+
+Before `--apply`, install the Xcode Command Line Tools through Apple's UI and
+Homebrew through its official instructions:
+
+```bash
+xcode-select --install
+# Follow https://docs.brew.sh/Installation; Apple Silicon prefix must be /opt/homebrew.
+```
+
+The adapter refuses root. It uses Homebrew only for OS prerequisites and keeps
+Node, Pi/npm CLIs, Firstmate, Herdr, Treehouse, no-mistakes, optional doctl, and
+optional language tools user-owned. Downloads are size-bounded and verified by
+reviewed SHA-256 before an atomic activation. Exact npm semvers are checked
+against the reviewed registry integrity before staging. The installer never
+creates accounts, enables Remote Login, changes the firewall or energy policy,
+or changes FileVault or automatic login. Interactive authorization required by
+Apple or Homebrew remains a human action. The existing-user adapter installs
+AXI CLIs without their cross-harness `setup hooks`, so it does not rewrite
+`~/.claude`, `~/.codex`, or OpenCode configuration.
+
+For optional post-login Herdr supervision, add `--launch-agent` with the Herdr
+backend. This installs and validates
+`~/Library/LaunchAgents/dev.bibi.herdr.default.plist` but does not load it. After
+reviewing it in an Aqua login session, load it explicitly:
+
+```bash
+launchctl bootstrap "gui/$(id -u)" \
+  "$HOME/Library/LaunchAgents/dev.bibi.herdr.default.plist"
+launchctl print "gui/$(id -u)/dev.bibi.herdr.default"
+```
+
+Run `~/.local/bin/bibi-verify` after apply and after loading the optional
+LaunchAgent. Herdr stdout/stderr are user-owned under
+`~/Library/Logs/Firstmate/`; include their growth and rotation in real-Mac
+acceptance rather than assuming hosted CI exercised them.
+
+`KeepAlive` can restart the Herdr server after a crash while that GUI user is
+logged in; `RunAtLoad` starts it only after login. It is not a pre-login daemon.
+With FileVault and automatic login unchanged, a cold boot waits for human
+unlock/login. Herdr endpoint identifiers may recover after a server restart,
+but Pi harness processes and live conversations do not survive logout/reboot;
+the next interactive `bibi` launch reconciles durable Firstmate state.
+
+### Required real Mac Mini acceptance receipt
+
+Do not describe native macOS as supported until a standard, disposable Apple
+Silicon account records all of these results:
+
+1. `--plan` changes no files; `--apply` succeeds without root-owned files in the user home; rerun is idempotent.
+2. Exact commands resolve in interactive and non-login shells and under the LaunchAgent's absolute PATH.
+3. `plutil -lint` and `launchctl print gui/<uid>/dev.bibi.herdr.default` prove the reviewed program, arguments, logs, and Aqua scope.
+4. A fresh Pi launch uses the new `FM_HOME`/Pi home, requires trust for only that clone, and requires a fresh provider `/login`.
+5. `herdr integration status` reports Pi `current` in that Pi home, and one controlled turn shows idle → working → idle in both Herdr and Firstmate.
+6. A disposable project/Treehouse worker can be created and safely torn down without touching another checkout or Herdr session.
+7. No project, backlog, state, secondmate marker, credential, grant, trust decision, or session from another instance exists.
+8. Wrong-checksum and interrupted-download tests leave the active command intact; staged upgrade and rollback both succeed.
+9. Logout/login starts only Herdr after Aqua login and does not claim Pi is alive. A FileVault reboot requires manual unlock/login and then reconciles.
+10. Browser smoke runs only when the browser profile is selected.
+
+## Authentication and private capabilities
+
+Public installation ends without GitHub, model-provider, cloud, browser, or
+media credentials. Authenticate each service freshly as the daily user. Then
+launch `bibi`, approve only the reviewed source clone, and run Pi `/login`.
+
+Private packages use a local manifest kept outside this public repository. Copy
+`examples/private-capabilities.manifest.example`, replace placeholders with
+reviewed GitHub HTTPS repositories and full 40-hex commit IDs, and protect it
+locally. The manifest is limited to 64 KiB and 1–32 distinct sources. On macOS,
+plan prints those sources; apply validates the entire manifest and requires
+`gh auth status` before any installer mutation, then uses `gh auth setup-git`
+and Pi's official installer. On a fresh Mac, apply `base` first, run
+`gh auth login`, then rerun with the private profile and manifest. On Ubuntu,
+the privileged setup phase refuses `--private-manifest`; after setup,
+authenticate as the daily user, and run
+`bibi-private-capabilities-update --apply /path/to/manifest`. That command applies
+the same complete preflight before installing. Tokens are never accepted
+in the manifest, argv, receipt, or repository.
+
+## Upgrade and rollback
+
+Change versions, commits, hashes, and npm integrities only in a reviewed PR.
+The macOS adapter stages and verifies user-owned archives and npm CLIs before
+switching command symlinks; a failed download, checksum, extraction, or version
+check leaves the active command unchanged. Ubuntu uses the pinned Ansible
+reconciliation path and its idempotency/upgrade fixture.
+Receipts contain versions, paths, profiles, and hashes but no credentials.
+Homebrew-managed prerequisites are verified rather than automatically
+downgraded. Activate service configuration last.
+
+To roll back, re-run a previously reviewed manifest. Switch Firstmate code back
+only when upstream declares state compatibility; otherwise restore the paired
+local state backup as well. Never roll back by importing this machine's state.
+The personal reconciler deliberately preserves a clean Firstmate checkout that
+advanced through `/updatefirstmate` instead of silently downgrading it.
+
+## What the Ubuntu compatibility profile builds
 
 - `bibi`: the unprivileged daily agent account; it cannot use `sudo`
 - `bibi-admin`: a separate key-only maintenance account with `sudo`
@@ -17,8 +170,9 @@ Pi, Herdr, FirstMate, source code, builds, and credentials stay on the Droplet.
 - checksum-pinned Herdr, Treehouse, no-mistakes, and official `doctl` binaries
 - a checksum-pinned Temurin JDK 21 and Clojure CLI in `/opt/bibi/toolchains`
 - exact npm pins for Pi, Wrangler 4.x, Firecrawl CLI, and the required AXI tools
-- exact public Pi package pins plus the reviewed official `cloudflare/skills`
-  `cloudflare` and `wrangler` skills
+- exact public Pi package pins plus the Ubuntu set named in
+  `cloudflare_skill_names` from the reviewed official `cloudflare/skills`
+  checkout
 - a reviewed commit pin and daily-user installer for the private Pi Extensions collection
 - SSH key authentication only, no root SSH, no agent forwarding
 - the DigitalOcean bootstrap key is removed from root after it is copied to
@@ -28,8 +182,15 @@ Pi, Herdr, FirstMate, source code, builds, and credentials stay on the Droplet.
   ownership-proven browser-helper leaks
 - GitHub Actions validation for YAML, Ansible, and cloud-init rendering
 
-Herdr is an experimental FirstMate backend. That choice is explicit in
-`firstmate/config/backend` and can be changed later.
+Herdr is an experimental FirstMate backend. That choice is explicit in the
+isolated instance's `config/backend`; changing an existing selection requires
+review rather than a silent setup rerun.
+
+## Ubuntu / DigitalOcean path
+
+The sections below retain the original unattended Ubuntu workflow. They select
+the explicit `ubuntu-compat` profile unless an operator invokes the portable
+entry point with narrower profiles.
 
 ## 1. Publish this repository
 
@@ -122,9 +283,9 @@ shared `/opt/bibi/toolchains` homes; no project checkout supplies Java or
 Clojure. Wrangler and the other global npm CLIs are exact version pins installed without
 package lifecycle scripts. Public Pi packages are reconciled through Pi's own
 package installer with npm lifecycle scripts disabled. The official Cloudflare
-skill repository is checked out at a
-reviewed commit, and only its `cloudflare` and `wrangler` skills are linked into
-the daily user's Pi skill directory. A bounded swap file and the memory guard's
+skill repository is checked out at a reviewed commit, and only the skills named
+in `cloudflare_skill_names` are linked into the daily user's Pi skill directory.
+A bounded swap file and the memory guard's
 service and timer are installed; provisioning runs the guard only in read-only
 report mode and never performs a cleanup. Provisioning does **not** authenticate
 Cloudflare or doctl, and it does not fetch the private Pi Extensions repository.
@@ -165,7 +326,7 @@ to compare the shown fingerprint with:
 ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub
 ```
 
-## 6. Authenticate and install the private Pi package
+## 6. Authenticate and install the legacy Ubuntu compatibility package
 
 Public machine provisioning ends before this section. Everything below runs as
 the daily user after `ssh bibi`; none of it belongs in cloud-init or Ansible.
@@ -202,10 +363,10 @@ Enter a newly created least-privilege DigitalOcean API token only in that masked
 prompt and confirm the displayed account/team identity. Never paste the token
 into chat, a shell command, Pi settings, Git, or this repository. Provisioning
 never runs `doctl auth`, creates a context, or contains a DigitalOcean/GitHub
-token. The extension requires Node.js 22+, Pi 0.83.0-compatible
-`pi-ai`, `coding-agent`, `pi-tui`, and `typebox` core peers, plus official
-doctl 1.165.0+ in the 1.x series. Pi supplies those peers; this repo pins
-compatible Pi 0.83.0 and doctl 1.166.0.
+token. The extension requires Node.js 22+ and the `pi-ai`, `coding-agent`,
+`pi-tui`, and `typebox` core peers, plus official doctl 1.165.0+ in the 1.x
+series. Pi supplies those peers; this pin was exercised with Pi 0.85.1 and
+doctl 1.166.0.
 
 If you prefer non-interactive Firecrawl setup, set `FIRECRAWL_API_KEY` in the
 remote VM environment instead of running `firecrawl login --browser`. Firecrawl
@@ -217,9 +378,10 @@ to the remote shell environment:
 export FIRECRAWL_NO_TELEMETRY=1
 ```
 
-Approve Pi's trust prompt the first time you launch it from `~/firstmate`; that
-allows FirstMate's tracked Pi extensions to load. Credentials stay on the
-remote VM. Do not forward your Mac's SSH agent.
+Approve Pi's trust prompt the first time `bibi` launches from the exact
+commit-named Firstmate source under `~/.local/share/firstmate/source/`; that
+allows Firstmate's tracked Pi extensions to load. Credentials stay in the new
+instance-local Pi home. Do not forward your Mac's SSH agent.
 
 ## 7. Launch the persistent flight deck
 
@@ -235,7 +397,8 @@ Inside Herdr, run:
 bibi
 ```
 
-`bibi` is a small launcher that enters `~/firstmate` and starts Pi. Herdr keeps
+`bibi` is a small launcher that exports the independent `FM_HOME` and Pi home,
+enters the reviewed Firstmate source, and starts Pi. Herdr keeps
 the PTY session alive when WezTerm closes or SSH disconnects. Reconnect with
 `ssh bibi`, run `herdr`, and reattach.
 
@@ -257,9 +420,11 @@ env -i HOME="$HOME" USER="$USER" LOGNAME="$LOGNAME" SHELL=/bin/bash \
 Before the interactive GitHub step, the private collection is reported as
 `pending` without invalidating the public system build. After
 `bibi-pi-extensions-update`, it must report the reviewed commit. A different or
-unpinned collection ref is an error. The authoritative provisioned pins are:
+unpinned collection ref is an error. `bibi-verify` reads the owner-only daily-user
+receipt. A root-readable mirror supports machine administration:
 
 ```bash
+cat "$HOME/.local/state/bibi/provisioned-versions"
 cat /etc/bibi-provisioned-versions
 ```
 
@@ -283,15 +448,17 @@ sudo ansible-playbook -i 'localhost,' shared-clojure-toolchain.yml
 ```
 
 3. After the reviewed change lands, enter through the maintenance identity and
-   reconcile public/system state:
+   reconcile public/system state. The command carries the receipt's selected
+   profiles and backend forward instead of silently expanding a narrow install:
 
 ```bash
 ssh bibi-admin
 sudo /usr/local/sbin/bibi-machine-update
 ```
 
-The machine update automatically reconciles Wrangler, public Pi packages, and
-the official Cloudflare skill checkout for `bibi` without touching credentials.
+For `ubuntu-compat`, the machine update reconciles Wrangler, public Pi packages,
+and the official Cloudflare skill checkout for `bibi` without touching
+credentials. Narrow profiles reconcile only their selected optional surfaces.
 
 4. Return as `bibi`. If the private collection pin changed—or merely to repair
    its checkout—rerun the authentication-gated daily-user reconciliation:
@@ -305,10 +472,10 @@ The daily `bibi` account cannot run the machine update command, and the admin
 reconciliation intentionally cannot fetch the private collection. Treat changes
 to this repository as root-level changes and protect its default branch.
 
-FirstMate also has its own `/updatefirstmate` workflow. If you use it, the live
-checkout can move beyond this repo's pin; the next Ansible reconciliation may
-return it to the configured commit. Prefer reviewing and bumping `firstmate_ref`
-here so rebuilds remain deterministic.
+Firstmate also has its own guarded `/updatefirstmate` workflow. If it advances a
+clean checkout, Ansible accepts that descendant and does not silently reset it
+to the older manifest floor. Review and bump `firstmate_ref` here so clean
+rebuilds eventually converge on the promoted commit.
 
 ## Memory safety net
 

@@ -19,8 +19,8 @@ jobs:
       - name: Install validators
         run: python3 -m pip install ansible-core ansible-lint yamllint
 
-      # Every step below runs a `make lint` target, so the local gate and CI
-      # cannot drift apart. Run `make lint` to reproduce all of them at once.
+      # Every step below runs one dependency of `make lint`, so the local gate
+      # and CI cannot drift apart. Run `make lint` to reproduce them at once.
       - name: Validate YAML
         run: make yaml
 
@@ -35,3 +35,15 @@ jobs:
 
       - name: Exercise provisioning and verification fixtures
         run: make test
+
+  # This hosted runner executes only plan/static/mocked adapter tests. It is not
+  # the real Mac Mini login/FileVault/launchd acceptance receipt in README.md.
+  portable-macos-static:
+    runs-on: macos-14
+    timeout-minutes: 10
+    steps:
+      - name: Check out the configuration
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Run non-destructive portable tests
+        run: make portable
