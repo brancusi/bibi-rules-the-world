@@ -1,0 +1,5 @@
+# Copy this file outside the public repository, replace both placeholders, and
+# protect it as local user configuration. Repository access comes from the
+# existing GitHub CLI credential helper; never put a token here.
+schema=bibi-private-capabilities.v1
+source=git:https://github.com/YOUR_ORG/YOUR_REVIEWED_PI_PACKAGE.git@0123456789abcdef0123456789abcdef01234567

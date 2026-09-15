@@ -1,5 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
-cd "{{ bibi_agent_home }}/firstmate"
+export FM_HOME="{{ firstmate_instance_home }}"
+export PI_CODING_AGENT_DIR="{{ bibi_pi_home }}"
+export TREEHOUSE_DIR="{{ firstmate_instance_home }}/treehouse"
+export TREEHOUSE_NO_UPDATE_CHECK=1
+export PATH="{{ bibi_agent_home }}/.local/bin:/usr/local/bin:/usr/bin:/bin:${PATH:-}"
+cd "{{ firstmate_source_dir }}"
 exec pi "$@"
-

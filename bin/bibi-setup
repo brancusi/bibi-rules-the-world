@@ -1,0 +1,96 @@
+#!/usr/bin/env bash
+# One portable entry point. Plan is the safe default; only --apply mutates.
+set -euo pipefail
+
+BIBI_ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)
+BIBI_MODE=plan
+BIBI_BACKEND=herdr
+BIBI_PROFILES=
+BIBI_LAUNCH_AGENT=false
+BIBI_PRIVATE_MANIFEST=
+mode_seen=false
+profiles_seen=false
+
+usage() {
+  cat <<'EOF'
+Usage: bin/bibi-setup [--plan|--apply] [--backend herdr|tmux]
+                      [--profile NAME ...] [--private-manifest PATH]
+                      [--launch-agent]
+
+Plan is read-only and is the default. Apply must be stated explicitly.
+Profiles: base, ubuntu-compat, public-pi-extras, private-capabilities,
+          cloudflare, digitalocean, web-research, clojure, browser
+ubuntu-compat preserves the historical complete Ubuntu installation and is the
+Ubuntu default when no profile is given. Native macOS defaults to base.
+--launch-agent only installs (does not load) the Aqua-scoped Herdr plist.
+EOF
+}
+
+add_profile() {
+  local value=$1 item old_ifs=$IFS
+  old_ifs=$IFS; IFS=,
+  for item in $value; do
+    case "$item" in
+      base|ubuntu-compat|public-pi-extras|private-capabilities|cloudflare|digitalocean|web-research|clojure|browser) ;;
+      *) IFS=$old_ifs; printf 'bibi-setup: unknown profile %s\n' "$item" >&2; exit 2 ;;
+    esac
+    case ",$BIBI_PROFILES," in *",$item,"*) ;; *) BIBI_PROFILES=${BIBI_PROFILES:+$BIBI_PROFILES,}$item ;; esac
+  done
+  IFS=$old_ifs
+}
+
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --plan|--apply)
+      if [ "$mode_seen" = true ] && [ "$BIBI_MODE" != "${1#--}" ]; then
+        printf '%s\n' 'bibi-setup: choose exactly one of --plan or --apply' >&2; exit 2
+      fi
+      BIBI_MODE=${1#--}; mode_seen=true; shift
+      ;;
+    --backend)
+      [ "$#" -ge 2 ] || { usage >&2; exit 2; }
+      BIBI_BACKEND=$2; shift 2
+      ;;
+    --profile)
+      [ "$#" -ge 2 ] || { usage >&2; exit 2; }
+      add_profile "$2"; profiles_seen=true; shift 2
+      ;;
+    --private-manifest)
+      [ "$#" -ge 2 ] || { usage >&2; exit 2; }
+      BIBI_PRIVATE_MANIFEST=$2; shift 2
+      ;;
+    --launch-agent) BIBI_LAUNCH_AGENT=true; shift ;;
+    -h|--help) usage; exit 0 ;;
+    *) printf 'bibi-setup: unknown argument %s\n' "$1" >&2; usage >&2; exit 2 ;;
+  esac
+done
+
+case "$BIBI_BACKEND" in herdr|tmux) ;; *) printf 'bibi-setup: backend must be herdr or tmux\n' >&2; exit 2 ;; esac
+
+BIBI_OS=$(uname -s)
+BIBI_ARCH=$(uname -m)
+if [ "${BIBI_SETUP_TESTING:-0}" = 1 ]; then
+  BIBI_OS=${BIBI_TEST_OS:-$BIBI_OS}
+  BIBI_ARCH=${BIBI_TEST_ARCH:-$BIBI_ARCH}
+fi
+if [ "$profiles_seen" = false ]; then
+  if [ "$BIBI_OS" = Linux ]; then BIBI_PROFILES=ubuntu-compat; else BIBI_PROFILES=base; fi
+fi
+if [ "$BIBI_OS" != Linux ]; then
+  case ",$BIBI_PROFILES," in *,ubuntu-compat,*) printf '%s\n' 'bibi-setup: ubuntu-compat is supported only on Ubuntu' >&2; exit 2 ;; esac
+fi
+if [ -n "$BIBI_PRIVATE_MANIFEST" ]; then
+  case ",$BIBI_PROFILES," in *,private-capabilities,*) ;; *) printf '%s\n' 'bibi-setup: --private-manifest requires --profile private-capabilities' >&2; exit 2 ;; esac
+  if [ "$BIBI_OS" = Linux ]; then
+    printf '%s\n' 'bibi-setup: Ubuntu private manifests run later as the daily user with bibi-private-capabilities-update' >&2
+    exit 2
+  fi
+fi
+
+export BIBI_ROOT BIBI_MODE BIBI_BACKEND BIBI_PROFILES BIBI_LAUNCH_AGENT BIBI_PRIVATE_MANIFEST BIBI_OS BIBI_ARCH
+case "$BIBI_OS-$BIBI_ARCH" in
+  Linux-x86_64|Linux-aarch64|Linux-arm64) exec "$BIBI_ROOT/scripts/setup-ubuntu.sh" ;;
+  Darwin-arm64) exec "$BIBI_ROOT/scripts/setup-macos.sh" ;;
+  Darwin-x86_64) printf '%s\n' 'bibi-setup: Intel macOS is out of scope; phase 1 requires native Apple Silicon' >&2; exit 1 ;;
+  *) printf 'bibi-setup: unsupported platform %s-%s\n' "$BIBI_OS" "$BIBI_ARCH" >&2; exit 1 ;;
+esac

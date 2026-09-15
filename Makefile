@@ -6,7 +6,7 @@
 SHELL := bash
 YAMLLINT_CONFIG := {extends: default, rules: {line-length: {max: 160}, document-start: disable, comments: disable}}
 
-.PHONY: lint yaml ansible shell python test render
+.PHONY: lint yaml ansible shell python portable test render
 
 lint: yaml ansible shell python test
 
@@ -25,15 +25,20 @@ ansible:
 	ansible-playbook --syntax-check -i 'localhost,' tests/fixtures/swap-safety-net-install.yml
 
 shell:
-	bash -n scripts/render-cloud-init.sh scripts/test-provisioning.sh scripts/verify.sh
-	shellcheck scripts/render-cloud-init.sh scripts/test-provisioning.sh scripts/verify.sh
-	shellcheck templates/bibi-launcher.j2 templates/bibi-machine-update.j2 templates/bibi-motd.j2 templates/bibi-pi-extensions-update.j2 templates/bibi-pi-public-packages-update.j2
+	bash -n bin/bibi-setup scripts/render-cloud-init.sh scripts/test-provisioning.sh scripts/setup-common.sh scripts/setup-macos.sh scripts/setup-ubuntu.sh scripts/verify.sh scripts/verify-common.sh scripts/verify-linux.sh scripts/verify-macos.sh tests/test-portable-setup.sh tests/test-firstmate-pin.sh tests/test-herdr-pi-lifecycle.sh
+	shellcheck bin/bibi-setup scripts/render-cloud-init.sh scripts/test-provisioning.sh scripts/setup-common.sh scripts/setup-macos.sh scripts/setup-ubuntu.sh scripts/verify.sh scripts/verify-common.sh scripts/verify-linux.sh scripts/verify-macos.sh tests/test-portable-setup.sh tests/test-firstmate-pin.sh tests/test-herdr-pi-lifecycle.sh
+	shellcheck templates/bibi-launcher.j2 templates/bibi-machine-update.j2 templates/bibi-motd.j2 templates/bibi-pi-extensions-update.j2 templates/bibi-pi-public-packages-update.j2 templates/bibi-private-capabilities-update.j2
 
 python:
 	python3 -m py_compile scripts/bibi_memory_guard.py tests/test_memory_guard.py
 	python3 -m unittest discover --start-directory tests --pattern 'test_*.py'
 
-test:
+portable:
+	./tests/test-portable-setup.sh
+	./tests/test-firstmate-pin.sh
+	./tests/test-herdr-pi-lifecycle.sh
+
+test: portable
 	./scripts/test-provisioning.sh
 
 render:

@@ -2,7 +2,8 @@
 set -euo pipefail
 
 read -r -a package_sources <<< "{{ pi_public_packages | join(' ') }}"
-settings_dir=${PI_CODING_AGENT_DIR:-"$HOME/.pi/agent"}
+settings_dir=${PI_CODING_AGENT_DIR:-"{{ bibi_pi_home }}"}
+export PI_CODING_AGENT_DIR="$settings_dir"
 settings_file="$settings_dir/settings.json"
 
 for package_source in "${package_sources[@]}"; do
