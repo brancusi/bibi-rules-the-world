@@ -655,7 +655,7 @@ cat >"$tmp_dir/memory-guard-vars.yml" <<EOF
 ---
 bibi_agent_user: "$(id -un)"
 bibi_agent_home: "$guard_home"
-memory_guard_version_pin: "1.0.0"
+memory_guard_version_pin: "1.1.0"
 memory_guard_owner: "$(id -un)"
 memory_guard_group: "$(id -gn)"
 memory_guard_enabled: true
@@ -679,6 +679,12 @@ memory_guard_mem_available_warn_percent: 20
 memory_guard_mem_available_critical_percent: 10
 memory_guard_swap_used_warn_percent: 25
 memory_guard_swap_used_critical_percent: 60
+memory_guard_launch_gate_enabled: true
+memory_guard_launch_worker_reserve_kb: 786432
+memory_guard_launch_min_mem_available_percent: 15
+memory_guard_launch_min_mem_available_no_swap_percent: 25
+memory_guard_launch_max_memory_stall_percent: 10
+memory_guard_launch_reservation_seconds: 300
 memory_guard_leak_min_age_seconds: 3600
 memory_guard_leak_min_member_age_seconds: 300
 memory_guard_leak_min_tree_rss_kb: 262144
@@ -696,9 +702,11 @@ memory_guard_timeout_seconds: 120
 memory_guard_memory_max: "192M"
 EOF
 run_memory_guard_installer() {
+  local log=$1
+  shift
   ansible-playbook --inventory 'localhost,' \
     "$root_dir/tests/fixtures/memory-guard-install.yml" \
-    --extra-vars "@$tmp_dir/memory-guard-vars.yml" >"$1" 2>&1
+    --extra-vars "@$tmp_dir/memory-guard-vars.yml" "$@" >"$log" 2>&1
 }
 must_succeed "$tmp_dir/memory-guard-first.log" "clean memory guard installation failed" \
   run_memory_guard_installer "$tmp_dir/memory-guard-first.log"
@@ -709,6 +717,12 @@ grep -q '^ExecStart=.*bibi-memory-guard once$' "$guard_state/systemd/bibi-memory
   || fail "memory guard service does not run the guard"
 grep -q '^OnUnitInactiveSec=15min$' "$guard_state/systemd/bibi-memory-guard.timer" \
   || fail "memory guard timer does not use the reviewed interval"
+for launch_key in launch_gate_enabled=true launch_worker_reserve_kb=786432 \
+  launch_min_mem_available_percent=15 launch_min_mem_available_no_swap_percent=25 \
+  launch_max_memory_stall_percent=10 launch_reservation_seconds=300; do
+  grep -qx "$launch_key" "$guard_state/etc/bibi-memory-guard.conf" \
+    || fail "memory guard policy did not render $launch_key"
+done
 must_succeed "$tmp_dir/memory-guard-second.log" "second memory guard reconciliation failed" \
   run_memory_guard_installer "$tmp_dir/memory-guard-second.log"
 grep -Eq 'changed=0([[:space:]]|$)' "$tmp_dir/memory-guard-second.log" \
@@ -730,6 +744,79 @@ if "$guard_state/sbin/bibi-memory-guard" once \
   --proc-source /dev/null >"$tmp_dir/memory-guard-refusal.log" 2>&1; then
   fail "memory guard accepted a synthetic inventory in destructive mode"
 fi
+
+# A launch admission policy tuned into a no-op is refused at reconciliation;
+# turning the gate off has to be the explicit, reviewed switch instead.
+if run_memory_guard_installer "$tmp_dir/memory-guard-weak-floor.log" \
+  --extra-vars 'memory_guard_launch_min_mem_available_percent=1'; then
+  fail "memory guard accepted a launch floor below its reviewed bound"
+fi
+if run_memory_guard_installer "$tmp_dir/memory-guard-no-reserve.log" \
+  --extra-vars 'memory_guard_launch_worker_reserve_kb=0'; then
+  fail "memory guard accepted a launch policy that budgets nothing for a worker"
+fi
+
+# Launch admission against the readings sysstat recorded around the 2026-09-17
+# wedge. The installed gate must refuse the launch that tipped the host, admit
+# on a healthy host, refuse a host it cannot measure, and start a command only
+# when it admits. A pure query must leave no reservation behind.
+guard_admit() {
+  XDG_RUNTIME_DIR="$guard_state/runtime" "$guard_state/sbin/bibi-memory-guard" admit \
+    --config "$guard_state/etc/bibi-memory-guard.conf" "$@"
+}
+mkdir -p "$guard_state/runtime"
+cat >"$tmp_dir/admit-before-trigger.json" <<'JSON'
+{"meminfo": {"MemTotal": 8131792, "MemAvailable": 769520, "SwapTotal": 2097148, "SwapFree": 60},
+ "pressure": {"some_avg10": 0.0, "some_avg60": 0.01, "full_avg60": 0.01}}
+JSON
+cat >"$tmp_dir/admit-healthy.json" <<'JSON'
+{"meminfo": {"MemTotal": 8131792, "MemAvailable": 6017000, "SwapTotal": 2097148, "SwapFree": 2097148},
+ "pressure": {"some_avg10": 0.0, "some_avg60": 0.0, "full_avg60": 0.0}}
+JSON
+printf '{"meminfo": {}}\n' >"$tmp_dir/admit-blind.json"
+admit_status=0
+guard_admit --proc-source "$tmp_dir/admit-before-trigger.json" \
+  >"$tmp_dir/admit-before-trigger.log" 2>&1 || admit_status=$?
+[[ $admit_status == 75 ]] || fail "launch admission did not refuse the launch that wedged the host (exit $admit_status)"
+grep -q '^admission: decision=refuse .*reasons=projected-headroom-below-floor,swap-cushion-exhausted$' \
+  "$tmp_dir/admit-before-trigger.log" || fail "launch admission did not name the incident's cause"
+grep -q 'never kills a worker' "$tmp_dir/admit-before-trigger.log" \
+  || fail "a refused launch must tell the operator that nothing was stopped"
+guard_admit --proc-source "$tmp_dir/admit-healthy.json" >"$tmp_dir/admit-healthy.log" 2>&1 \
+  || fail "launch admission refused a healthy host"
+grep -q '^admission: decision=admit level=ok ' "$tmp_dir/admit-healthy.log" \
+  || fail "launch admission did not admit a healthy host cleanly"
+admit_status=0
+guard_admit --proc-source "$tmp_dir/admit-blind.json" >"$tmp_dir/admit-blind.log" 2>&1 || admit_status=$?
+[[ $admit_status == 69 ]] || fail "launch admission must refuse a host it cannot measure (exit $admit_status)"
+admit_status=0
+guard_admit --no-reserve >"$tmp_dir/admit-query.log" 2>&1 || admit_status=$?
+[[ $admit_status == 0 || $admit_status == 75 ]] || fail "launch admission could not decide on this host"
+[[ -z $(find "$guard_state/runtime" -mindepth 1 -print -quit) ]] \
+  || fail "a pure admission query left a reservation behind"
+# A refused launch must never start its command. 100% floors refuse any host.
+sed -e 's/^launch_min_mem_available_percent=.*/launch_min_mem_available_percent=100/' \
+  -e 's/^launch_min_mem_available_no_swap_percent=.*/launch_min_mem_available_no_swap_percent=100/' \
+  "$guard_state/etc/bibi-memory-guard.conf" >"$tmp_dir/admit-closed.conf"
+admit_status=0
+XDG_RUNTIME_DIR="$guard_state/runtime" "$guard_state/sbin/bibi-memory-guard" admit \
+  --config "$tmp_dir/admit-closed.conf" -- touch "$tmp_dir/launched-while-closed" \
+  >"$tmp_dir/admit-closed.log" 2>&1 || admit_status=$?
+[[ $admit_status == 75 && ! -e "$tmp_dir/launched-while-closed" ]] \
+  || fail "a refused launch started its command anyway"
+# An admitted launch becomes exactly the given command. 0% floors, a 1 kB
+# reserve, and an unreachable stall limit admit any host /proc can describe.
+sed -e 's/^launch_min_mem_available_percent=.*/launch_min_mem_available_percent=0/' \
+  -e 's/^launch_min_mem_available_no_swap_percent=.*/launch_min_mem_available_no_swap_percent=0/' \
+  -e 's/^launch_worker_reserve_kb=.*/launch_worker_reserve_kb=1/' \
+  -e 's/^launch_max_memory_stall_percent=.*/launch_max_memory_stall_percent=101/' \
+  "$guard_state/etc/bibi-memory-guard.conf" >"$tmp_dir/admit-open.conf"
+XDG_RUNTIME_DIR="$guard_state/runtime" "$guard_state/sbin/bibi-memory-guard" admit \
+  --config "$tmp_dir/admit-open.conf" -- touch "$tmp_dir/launched-while-open" \
+  >"$tmp_dir/admit-open.log" 2>&1 || fail "an admitted launch did not start its command"
+[[ -e "$tmp_dir/launched-while-open" ]] || fail "an admitted launch did not run the given command"
+[[ -s "$guard_state/runtime/bibi-memory-guard/launch-reservations" ]] \
+  || fail "an admitted launch did not record its reservation"
 
 # The rendered policy must never leak a command line or environment value.
 if grep -Eq 'cmdline|environ|argv' "$guard_state/etc/bibi-memory-guard.conf" \
@@ -795,8 +882,8 @@ chmod 0755 "$motd_dir/99-bibi"
 "$motd_dir/99-bibi" >"$motd_dir/banner.log"
 grep -Eq '^  Memory: [0-9]+ MB available, (no swap|swap [0-9]+/[0-9]+ MB)$' "$motd_dir/banner.log" \
   || fail "login banner does not report memory availability"
-grep -Eq '^  Guard:  level=(ok|warn|critical) ' "$motd_dir/banner.log" \
-  || fail "login banner does not report the memory guard verdict"
+grep -Eq '^  Guard:  level=(ok|warn|critical) .*launches=(open|CLOSED)' "$motd_dir/banner.log" \
+  || fail "login banner does not report the memory guard verdict and launch admission"
 if grep -Eqi 'systemctl|swapon|kill' "$motd_dir/99-bibi"; then
   fail "login banner may only read state, never change it"
 fi
@@ -813,7 +900,7 @@ chmod 0755 "$memory_verify/bin/systemctl"
 printf 'Filename\t\t\t\tType\t\tSize\t\tUsed\t\tPriority\n' >"$memory_verify/swaps"
 printf '%s\tfile\t\t2097148\t\t0\t\t10\n' "$swap_state/swapfile" >>"$memory_verify/swaps"
 cat >"$memory_verify/versions" <<EOF
-memory_guard_version=1.0.0
+memory_guard_version=1.1.0
 memory_guard_install_path=$guard_state/sbin/bibi-memory-guard
 memory_guard_owner=$(id -un)
 memory_guard_group=$(id -gn)
@@ -823,6 +910,9 @@ memory_guard_enabled=true
 memory_guard_interval=15min
 memory_guard_leak_min_age_seconds=3600
 memory_guard_leak_max_trees_per_run=2
+memory_guard_launch_gate_enabled=true
+memory_guard_launch_worker_reserve_kb=786432
+memory_guard_launch_min_mem_available_percent=15
 swap_file_path=$swap_state/swapfile
 swap_file_size_mb=2048
 swap_swappiness=10
@@ -834,8 +924,16 @@ memory_verify_env=(
   BIBI_PROC_SWAPS="$memory_verify/swaps"
 )
 env "${memory_verify_env[@]}" "$root_dir/scripts/verify.sh" >"$memory_verify/good.log"
-grep -q '^ok       memory guard 1.0.0$' "$memory_verify/good.log" \
+grep -q '^ok       memory guard 1.1.0$' "$memory_verify/good.log" \
   || fail "bibi-verify did not accept the installed memory guard"
+grep -Eq '^(ok       launch admission open|warn     launch admission CLOSED)' "$memory_verify/good.log" \
+  || fail "bibi-verify did not report launch admission"
+sed 's/^memory_guard_launch_min_mem_available_percent=.*/memory_guard_launch_min_mem_available_percent=40/' \
+  "$memory_verify/versions" >"$memory_verify/versions-drifted"
+if env "${memory_verify_env[@]}" BIBI_VERSIONS_FILE="$memory_verify/versions-drifted" \
+  "$root_dir/scripts/verify.sh" >"$memory_verify/bad-launch-floor.log" 2>&1; then
+  fail "bibi-verify accepted a launch floor that drifted from its reviewed pin"
+fi
 grep -q '^ok       swap safety net ' "$memory_verify/good.log" \
   || fail "bibi-verify did not accept the bounded swap safety net"
 

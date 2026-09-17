@@ -28,6 +28,17 @@ Low memory raises alerts; it never lowers the bar for killing a process. A
 large, old, ownership-proven tree is cleaned on the ordinary schedule, before
 any emergency.
 
+A second failure mode is handled by admission, never by killing. On
+2026-09-17 nothing had leaked: the aggregate working set of live, legitimate
+workers had filled swap and drained MemAvailable, and one more worker launch
+evicted the fleet's executable pages. The kernel then refaulted them forever
+without ever declaring an OOM, and the host wedged. No process in that state
+is provably abandoned, so nothing may be killed. The only safe lever is to
+refuse the *next* launch. `admit` therefore answers one question from
+`/proc/meminfo` and `/proc/pressure/memory` alone - "is there headroom for one
+more worker?" - and that code path never builds a process inventory, never
+constructs a signaller, and can never send a signal.
+
 The process inventory, the memory reading, the socket table, the clock, the
 sleep, and the signal sender are all injected, so the full decision pipeline
 runs against synthetic inventories in tests without touching a real process.
@@ -48,7 +59,7 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Callable, Iterable, Sequence
 
-VERSION = "1.0.0"
+VERSION = "1.1.0"
 
 DEFAULT_CONFIG_PATH = "/etc/bibi-memory-guard.conf"
 
@@ -81,6 +92,16 @@ DEFAULTS: dict[str, str] = {
     "leak_max_trees_per_run": "2",
     "owner_task_settled_seconds": "900",
     "busy_state_fresh_seconds": "3600",
+    # Launch admission. Refusing a launch is the only action these authorise;
+    # like the observation thresholds, they never authorise a kill.
+    "launch_gate_enabled": "true",
+    "launch_worker_reserve_kb": "786432",
+    "launch_min_mem_available_percent": "15",
+    "launch_min_mem_available_no_swap_percent": "25",
+    "launch_max_memory_stall_percent": "10",
+    "launch_reservation_seconds": "300",
+    # Empty means the invoking user's XDG runtime directory.
+    "launch_ledger_dir": "",
     # Termination behaviour.
     "term_grace_seconds": "10",
     "term_poll_interval_seconds": "0.5",
@@ -105,12 +126,18 @@ INT_KEYS = frozenset(
         "busy_state_fresh_seconds",
         "term_grace_seconds",
         "max_log_lines",
+        "launch_worker_reserve_kb",
+        "launch_min_mem_available_percent",
+        "launch_min_mem_available_no_swap_percent",
+        "launch_reservation_seconds",
     }
 )
 
-FLOAT_KEYS = frozenset({"term_poll_interval_seconds"})
+FLOAT_KEYS = frozenset({"term_poll_interval_seconds", "launch_max_memory_stall_percent"})
 
 LIST_KEYS = frozenset({"owner_commands"})
+
+BOOL_KEYS = frozenset({"launch_gate_enabled"})
 
 
 class ConfigError(RuntimeError):
@@ -151,6 +178,10 @@ def load_config(path: str | None) -> dict[str, object]:
                 raise ConfigError(f"{key} must be a number, got {value!r}") from exc
         elif key in LIST_KEYS:
             config[key] = tuple(value.split())
+        elif key in BOOL_KEYS:
+            if value.lower() not in {"true", "false"}:
+                raise ConfigError(f"{key} must be true or false, got {value!r}")
+            config[key] = value.lower() == "true"
         else:
             config[key] = value
     return config
@@ -332,10 +363,52 @@ def classify(raw: RawProcess) -> Process:
 
 
 @dataclass(frozen=True)
+class PressureReading:
+    """Memory pressure stall information, as the kernel averages it.
+
+    `some` is the share of wall time in which at least one task was stalled on
+    memory. These are the same figures `sar -q MEM` records as %smem.
+    """
+
+    some_avg10: float
+    some_avg60: float
+    full_avg60: float
+
+
+PRESSURE_FIELD_RE = re.compile(r"(avg10|avg60|avg300)=([0-9]+(?:\.[0-9]+)?)")
+
+
+def parse_pressure(text: str) -> PressureReading | None:
+    """Parse /proc/pressure/memory, or None when it is not a PSI document."""
+    rows: dict[str, dict[str, float]] = {}
+    for line in text.splitlines():
+        kind, _, rest = line.partition(" ")
+        if kind in {"some", "full"}:
+            rows[kind] = {name: float(value) for name, value in PRESSURE_FIELD_RE.findall(rest)}
+    some = rows.get("some", {})
+    if "avg10" not in some or "avg60" not in some:
+        return None
+    return PressureReading(
+        some_avg10=some["avg10"],
+        some_avg60=some["avg60"],
+        full_avg60=rows.get("full", {}).get("avg60", 0.0),
+    )
+
+
+@dataclass(frozen=True)
+class MemoryFacts:
+    """Everything launch admission reads: two small /proc files, no processes."""
+
+    meminfo: dict[str, int]
+    pressure: PressureReading | None
+
+
+@dataclass(frozen=True)
 class Inventory:
     processes: tuple[Process, ...]
     meminfo: dict[str, int]
     tcp_states: dict[int, frozenset[str]]
+    pressure: PressureReading | None = None
 
     def by_pid(self) -> dict[int, Process]:
         return {process.pid: process for process in self.processes}
@@ -379,7 +452,31 @@ class ProcSource:
             processes=tuple(processes),
             meminfo=self._read_meminfo(),
             tcp_states=self._read_tcp_states(),
+            pressure=self._read_pressure(),
         )
+
+    def read_memory_facts(self) -> MemoryFacts:
+        """Read only what launch admission needs. Never walks the process table.
+
+        An unreadable /proc/meminfo yields an empty reading rather than an
+        exception, so the admission decision can name the missing telemetry.
+        """
+        try:
+            meminfo = self._read_meminfo()
+        except (OSError, ValueError):
+            meminfo = {}
+        return MemoryFacts(meminfo=meminfo, pressure=self._read_pressure())
+
+    def _read_pressure(self) -> PressureReading | None:
+        # PSI is optional: a kernel built without it simply has no such file.
+        try:
+            text = (self.proc_root / "pressure" / "memory").read_text(encoding="utf-8")
+        except OSError:
+            return None
+        try:
+            return parse_pressure(text)
+        except ValueError:
+            return None
 
     def _read_process(self, entry: Path, boot_time: float, now: float) -> RawProcess | None:
         try:
@@ -528,6 +625,22 @@ class FixtureSource:
             processes=tuple(processes),
             meminfo=dict(self.document.get("meminfo", {})),
             tcp_states=tcp_states,
+            pressure=self._pressure(),
+        )
+
+    def read_memory_facts(self) -> MemoryFacts:
+        return MemoryFacts(
+            meminfo=dict(self.document.get("meminfo", {})), pressure=self._pressure()
+        )
+
+    def _pressure(self) -> PressureReading | None:
+        record = self.document.get("pressure")
+        if not isinstance(record, dict):
+            return None
+        return PressureReading(
+            some_avg10=float(record.get("some_avg10", 0.0)),
+            some_avg60=float(record.get("some_avg60", 0.0)),
+            full_avg60=float(record.get("full_avg60", 0.0)),
         )
 
 
@@ -795,6 +908,390 @@ def memory_level(reading: MemoryReading, config: dict[str, object]) -> tuple[str
     elif level != "ok":
         reasons.append("no-swap-headroom")
     return level, tuple(reasons)
+
+
+# ---------------------------------------------------------------------------
+# Launch admission
+# ---------------------------------------------------------------------------
+
+EXIT_ADMIT = 0
+EXIT_REFUSED_TELEMETRY = 69  # EX_UNAVAILABLE: the facts could not be read
+EXIT_REFUSED_PRESSURE = 75  # EX_TEMPFAIL: retry once memory has been freed
+
+REASON_GATE_DISABLED = "launch-gate-disabled"
+REASON_TELEMETRY = "memory-telemetry-unavailable"
+REASON_HEADROOM = "projected-headroom-below-floor"
+REASON_SWAP_EXHAUSTED = "swap-cushion-exhausted"
+REASON_NO_SWAP = "no-swap-cushion"
+REASON_STALL = "memory-stall"
+
+
+def telemetry_problems(meminfo: dict[str, int]) -> tuple[str, ...]:
+    """Name what is missing from a memory reading, or () when it is usable.
+
+    `read_memory` deliberately tolerates gaps so observation can still report.
+    Admission cannot: a reading with no MemTotal looks 100% available, and
+    admitting on a number nobody measured is how a host gets tipped over.
+    """
+    problems: list[str] = []
+    total = meminfo.get("MemTotal")
+    available = meminfo.get("MemAvailable")
+    if not isinstance(total, int) or total <= 0:
+        problems.append("MemTotal")
+    if not isinstance(available, int) or available < 0:
+        problems.append("MemAvailable")
+    if not problems and available > total:
+        problems.append("MemAvailable-exceeds-MemTotal")
+    return tuple(problems)
+
+
+@dataclass(frozen=True)
+class Admission:
+    """Whether one more worker may start. Refusing is the only effect."""
+
+    decision: str  # "admit" or "refuse"
+    level: str  # ok, warn, critical, or unknown when telemetry is unavailable
+    reasons: tuple[str, ...]
+    mem_total_kb: int = 0
+    mem_available_kb: int = 0
+    pending_reserved_kb: int = 0
+    worker_reserve_kb: int = 0
+    projected_available_kb: int = 0
+    required_floor_kb: int = 0
+    floor_percent: int = 0
+    swap_used_percent: float = 0.0
+    swap_cushion: bool = False
+    memory_stall_avg60: float | None = None
+    missing: tuple[str, ...] = ()
+
+    @property
+    def admitted(self) -> bool:
+        return self.decision == "admit"
+
+    @property
+    def exit_code(self) -> int:
+        if self.admitted:
+            return EXIT_ADMIT
+        return EXIT_REFUSED_TELEMETRY if REASON_TELEMETRY in self.reasons else EXIT_REFUSED_PRESSURE
+
+    def to_state(self) -> dict:
+        return {
+            "decision": self.decision,
+            "level": self.level,
+            "reasons": list(self.reasons),
+            "mem_available_kb": self.mem_available_kb,
+            "pending_reserved_kb": self.pending_reserved_kb,
+            "worker_reserve_kb": self.worker_reserve_kb,
+            "projected_available_kb": self.projected_available_kb,
+            "required_floor_kb": self.required_floor_kb,
+            "floor_percent": self.floor_percent,
+            "swap_used_percent": round(self.swap_used_percent, 1),
+            "swap_cushion": self.swap_cushion,
+            "memory_stall_avg60": self.memory_stall_avg60,
+            "missing_telemetry": list(self.missing),
+        }
+
+
+def decide_admission(
+    facts: MemoryFacts, pending_reserved_kb: int, config: dict[str, object]
+) -> Admission:
+    """Decide from /proc facts alone whether one more worker fits.
+
+    The question is about the launch that has not happened yet, so the test is
+    on *projected* headroom: MemAvailable, less the reserve already promised to
+    workers admitted moments ago, less the budget for this one. What remains
+    must clear a floor, because MemAvailable is mostly page cache and that
+    cache is the running fleet's executable text - the 2026-09-17 wedge began
+    when it was evicted, not when memory ran out.
+
+    Swap raises the floor rather than refusing outright. Swap that is absent or
+    already past the guard's own critical mark is no cushion, so the floor is
+    the stricter one; a host with ample RAM and old cold pages parked in swap
+    is still admitted.
+
+    Pure function of its arguments. It reads no process, names no process, and
+    nothing it returns is ever consulted when deciding whether to kill.
+    """
+    stall = facts.pressure.some_avg60 if facts.pressure is not None else None
+    missing = telemetry_problems(facts.meminfo)
+
+    if not bool(config["launch_gate_enabled"]):
+        return Admission(
+            decision="admit",
+            level="unknown" if missing else memory_level(read_memory(facts.meminfo), config)[0],
+            reasons=(REASON_GATE_DISABLED,),
+            memory_stall_avg60=stall,
+            missing=missing,
+        )
+
+    if missing:
+        # Refusing a launch loses nothing and can be retried. Admitting blind
+        # can wedge the host and put every running worker's work at risk.
+        return Admission(
+            decision="refuse",
+            level="unknown",
+            reasons=(REASON_TELEMETRY,),
+            memory_stall_avg60=stall,
+            missing=missing,
+        )
+
+    reading = read_memory(facts.meminfo)
+    level, level_reasons = memory_level(reading, config)
+
+    swap_cushion = bool(reading.swap_total_kb) and reading.swap_used_percent < float(
+        config["swap_used_critical_percent"]
+    )
+    floor_percent = int(
+        config["launch_min_mem_available_percent"]
+        if swap_cushion
+        else config["launch_min_mem_available_no_swap_percent"]
+    )
+    required_floor_kb = reading.total_kb * floor_percent // 100
+    reserve_kb = int(config["launch_worker_reserve_kb"])
+    pending_kb = max(int(pending_reserved_kb), 0)
+    projected_kb = reading.available_kb - pending_kb - reserve_kb
+
+    refusals: list[str] = []
+    if projected_kb < required_floor_kb:
+        refusals.append(REASON_HEADROOM)
+        if not swap_cushion:
+            refusals.append(REASON_SWAP_EXHAUSTED if reading.swap_total_kb else REASON_NO_SWAP)
+    if stall is not None and stall >= float(config["launch_max_memory_stall_percent"]):
+        refusals.append(REASON_STALL)
+
+    return Admission(
+        decision="refuse" if refusals else "admit",
+        level=level,
+        # An admitted launch still carries the observation reasons, so the
+        # launcher hears "warn" long before it ever hears "refuse".
+        reasons=tuple(refusals) if refusals else level_reasons,
+        mem_total_kb=reading.total_kb,
+        mem_available_kb=reading.available_kb,
+        pending_reserved_kb=pending_kb,
+        worker_reserve_kb=reserve_kb,
+        projected_available_kb=projected_kb,
+        required_floor_kb=required_floor_kb,
+        floor_percent=floor_percent,
+        swap_used_percent=reading.swap_used_percent,
+        swap_cushion=swap_cushion,
+        memory_stall_avg60=stall,
+    )
+
+
+def emit_admission(reporter: Reporter, admission: Admission, ledger: str) -> None:
+    reporter.emit(
+        "admission",
+        decision=admission.decision,
+        level=admission.level,
+        mem_total_kb=admission.mem_total_kb,
+        mem_available_kb=admission.mem_available_kb,
+        pending_reserved_kb=admission.pending_reserved_kb,
+        worker_reserve_kb=admission.worker_reserve_kb,
+        projected_available_kb=admission.projected_available_kb,
+        required_floor_kb=admission.required_floor_kb,
+        floor_percent=admission.floor_percent,
+        swap_used_percent=admission.swap_used_percent,
+        swap_cushion="yes" if admission.swap_cushion else "no",
+        memory_stall_avg60=admission.memory_stall_avg60,
+        ledger=ledger,
+        missing=list(admission.missing) or None,
+        reasons=list(admission.reasons) or None,
+    )
+
+
+def explain_refusal(admission: Admission) -> list[str]:
+    """Operator-facing sentences for a refused launch. Numbers only, no names."""
+
+    def mb(kilobytes: int) -> int:
+        return max(kilobytes, 0) // 1024
+
+    lines = ["launch REFUSED: this host has no safe headroom for another worker."]
+    if REASON_TELEMETRY in admission.reasons:
+        lines.append(
+            "  /proc/meminfo did not yield " + ", ".join(admission.missing)
+            + "; admitting on an unmeasured host is not safe."
+        )
+    if REASON_HEADROOM in admission.reasons:
+        pending = (
+            f" and {mb(admission.pending_reserved_kb)} MB is already promised to workers"
+            " admitted in the last few minutes"
+            if admission.pending_reserved_kb
+            else ""
+        )
+        lines.append(
+            f"  MemAvailable is {mb(admission.mem_available_kb)} MB{pending}; one more worker is"
+            f" budgeted at {mb(admission.worker_reserve_kb)} MB, leaving"
+            f" {mb(admission.projected_available_kb)} MB."
+        )
+        if REASON_SWAP_EXHAUSTED in admission.reasons:
+            why = f" because swap is {admission.swap_used_percent:.0f}% used and is no longer a cushion"
+        elif REASON_NO_SWAP in admission.reasons:
+            why = " because this host has no swap cushion"
+        else:
+            why = ""
+        lines.append(
+            f"  The floor is {mb(admission.required_floor_kb)} MB"
+            f" ({admission.floor_percent}% of RAM){why}."
+        )
+    if REASON_STALL in admission.reasons:
+        lines.append(
+            f"  Tasks spent {admission.memory_stall_avg60:.1f}% of the last minute stalled on"
+            " memory (PSI some avg60): the host is already thrashing."
+        )
+    lines.extend(
+        [
+            "  Nothing was started and nothing was stopped. This gate never kills a worker.",
+            "  Let running workers finish, or deliberately land or stow one, then retry.",
+            "  Inspect: bibi-memory-guard admit --no-reserve ; free -m ; sar -r -S -B -q MEM 1 3",
+        ]
+    )
+    return lines
+
+
+class LaunchLedger:
+    """Short-lived record of headroom promised to just-admitted workers.
+
+    A worker takes minutes to grow into its working set, so a burst of launches
+    would each read the same comfortable MemAvailable. Every admission
+    therefore leaves a reservation that later admissions subtract until it
+    expires and /proc shows the memory for real.
+
+    The ledger lives in the invoking user's runtime directory and holds only
+    `<epoch> <kb>` lines. It is an enhancement to the /proc facts, never a
+    substitute: when it cannot be used the decision proceeds on /proc alone and
+    says so.
+    """
+
+    FILE_NAME = "launch-reservations"
+    MAX_ENTRIES = 256
+    LOCK_ATTEMPTS = 20
+    LOCK_RETRY_SECONDS = 0.05
+
+    def __init__(
+        self,
+        directory: str | None,
+        window_seconds: float,
+        now: Callable[[], float] = time.time,
+        sleep: Callable[[float], None] = time.sleep,
+        writable: bool = True,
+    ) -> None:
+        self.directory = directory
+        self.window_seconds = window_seconds
+        # A pure query reads existing reservations but creates nothing.
+        self.writable = writable
+        self.now = now
+        self.sleep = sleep
+        self.status = "unavailable"
+        self._handle = None
+        self._entries: list[tuple[float, int]] = []
+
+    @staticmethod
+    def default_directory(configured: str, environ: dict[str, str], uid: int) -> str | None:
+        if configured:
+            return configured
+        runtime = environ.get("XDG_RUNTIME_DIR") or f"/run/user/{uid}"
+        if os.path.isdir(runtime) and os.access(runtime, os.W_OK):
+            return os.path.join(runtime, "bibi-memory-guard")
+        return None
+
+    def __enter__(self) -> LaunchLedger:
+        if not self.directory:
+            return self
+        path = os.path.join(self.directory, self.FILE_NAME)
+        try:
+            if self.writable:
+                os.makedirs(self.directory, mode=0o700, exist_ok=True)
+                flags = os.O_RDWR | os.O_CREAT
+            else:
+                flags = os.O_RDONLY
+            descriptor = os.open(path, flags | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600)
+        except FileNotFoundError:
+            if not self.writable:
+                self.status = "empty"
+            return self
+        except OSError:
+            return self
+        handle = os.fdopen(descriptor, "r+" if self.writable else "r", encoding="utf-8")
+        lock = fcntl.LOCK_EX if self.writable else fcntl.LOCK_SH
+        # Bounded, non-blocking attempts: a gate that can hang on its own lock
+        # would be one more thing wedged on a host that is already struggling.
+        for _ in range(self.LOCK_ATTEMPTS):
+            try:
+                fcntl.flock(handle.fileno(), lock | fcntl.LOCK_NB)
+                break
+            except OSError:
+                self.sleep(self.LOCK_RETRY_SECONDS)
+        else:
+            handle.close()
+            self.status = "busy"
+            return self
+        self._handle = handle
+        self._entries = self._read(handle)
+        self.status = "ok"
+        return self
+
+    def __exit__(self, *_exc) -> None:
+        if self._handle is not None:
+            self._handle.close()
+            self._handle = None
+
+    def _read(self, handle) -> list[tuple[float, int]]:
+        now = self.now()
+        entries: list[tuple[float, int]] = []
+        try:
+            lines = handle.read().splitlines()[-self.MAX_ENTRIES :]
+        except (OSError, UnicodeDecodeError):
+            return entries
+        for line in lines:
+            parts = line.split()
+            if len(parts) != 2:
+                continue
+            try:
+                stamp, kilobytes = float(parts[0]), int(parts[1])
+            except ValueError:
+                continue
+            # A stamp from the future is a clock step, not a promise to honour.
+            if kilobytes > 0 and -1.0 <= now - stamp < self.window_seconds:
+                entries.append((stamp, kilobytes))
+        return entries
+
+    @property
+    def pending_kb(self) -> int:
+        return sum(kilobytes for _, kilobytes in self._entries)
+
+    def reserve(self, kilobytes: int) -> bool:
+        if self._handle is None or not self.writable or kilobytes <= 0:
+            return False
+        self._entries.append((self.now(), kilobytes))
+        try:
+            self._handle.seek(0)
+            self._handle.truncate()
+            self._handle.write(
+                "".join(f"{stamp:.0f} {size}\n" for stamp, size in self._entries[-self.MAX_ENTRIES :])
+            )
+            self._handle.flush()
+        except OSError:
+            self.status = "write-failed"
+            return False
+        return True
+
+
+def admit_launch(
+    facts: MemoryFacts,
+    config: dict[str, object],
+    ledger: LaunchLedger,
+    reserve: bool,
+) -> Admission:
+    """Decide and, only when admitting for real, record the reservation.
+
+    The ledger lock spans read, decision, and write, so two launches racing
+    each other cannot both spend the same headroom.
+    """
+    with ledger:
+        admission = decide_admission(facts, ledger.pending_kb, config)
+        if reserve and admission.admitted and bool(config["launch_gate_enabled"]):
+            ledger.reserve(admission.worker_reserve_kb)
+    return admission
 
 
 # ---------------------------------------------------------------------------
@@ -1171,6 +1668,7 @@ class RunOutcome:
     candidates: list[Candidate] = field(default_factory=list)
     cleanups: list[CleanupResult] = field(default_factory=list)
     alerts: list[str] = field(default_factory=list)
+    admission: Admission | None = None
     exit_code: int = 0
 
     def to_state(self, timestamp: float) -> dict:
@@ -1180,6 +1678,7 @@ class RunOutcome:
             "mode": self.mode,
             "level": self.level,
             "alerts": list(self.alerts),
+            "admission": self.admission.to_state() if self.admission else None,
             "memory": {
                 "before": {
                     "mem_available_kb": self.memory_before.available_kb,
@@ -1258,6 +1757,15 @@ def run(
         reasons=list(level_reasons),
     )
 
+    # The scheduled run records whether a launch would be admitted right now,
+    # so the login banner and bibi-verify show a closed gate before anyone
+    # tries to launch. It reserves nothing and, like the level above, is never
+    # consulted when deciding whether a process may be killed.
+    admission = decide_admission(
+        MemoryFacts(meminfo=inventory.meminfo, pressure=inventory.pressure), 0, config
+    )
+    emit_admission(reporter, admission, ledger="not-consulted")
+
     family = [process for process in inventory.processes if process.role in FAMILY_ROLES]
     reporter.emit(
         "family",
@@ -1291,8 +1799,13 @@ def run(
         memory_before=memory_before,
         memory_after=memory_before,
         candidates=candidates,
+        admission=admission,
     )
     outcome.alerts.extend(level_reasons)
+    if REASON_TELEMETRY in admission.reasons or admission.missing:
+        outcome.alerts.append(REASON_TELEMETRY)
+    if not admission.admitted:
+        outcome.alerts.append("launch-admission-closed")
 
     # Chromium double-forks, so a browser reparented to PID 1 is the normal
     # shape for a perfectly healthy session - alerting on that alone would fire
@@ -1481,21 +1994,31 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="bibi-memory-guard",
         description=(
-            "Report host memory pressure and clean only ownership-proven "
-            "chrome-devtools-axi / chrome-devtools-mcp leak trees."
+            "Report host memory pressure, clean only ownership-proven "
+            "chrome-devtools-axi / chrome-devtools-mcp leak trees, and refuse a "
+            "new worker launch when the host has no headroom for it."
         ),
     )
     parser.add_argument(
         "mode",
         nargs="?",
         default="report",
-        choices=["report", "dry-run", "once", "status"],
+        choices=["report", "dry-run", "once", "status", "admit"],
         help=(
             "report: observe and decide, never act (default). "
             "dry-run: same decisions, print the exact planned kill set. "
             "once: act on eligible trees. "
-            "status: print the last recorded run."
+            "status: print the last recorded run. "
+            "admit: decide from /proc/meminfo alone whether one more worker may "
+            "launch; exit 0 admits, 75 refuses for headroom, 69 refuses because "
+            "memory telemetry is unavailable. Append '-- command...' to start the "
+            "command only when admitted. Never signals any process."
         ),
+    )
+    parser.add_argument(
+        "--no-reserve",
+        action="store_true",
+        help="admit: answer without recording a launch reservation (a pure query)",
     )
     parser.add_argument("--config", default=DEFAULT_CONFIG_PATH, help="configuration file path")
     parser.add_argument("--json", action="store_true", help="emit the machine-readable record")
@@ -1507,15 +2030,89 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def main(argv: Sequence[str] | None = None) -> int:
+def run_admit(
+    args: argparse.Namespace,
+    config: dict[str, object],
+    command: Sequence[str],
+    execvp: Callable[[str, Sequence[str]], None],
+) -> int:
+    """Launch admission. This path never inventories or signals a process."""
+    if args.proc_source:
+        if command:
+            print("error: refusing to launch a command against synthetic facts", file=sys.stderr)
+            return 2
+        try:
+            document = json.loads(Path(args.proc_source).read_text(encoding="utf-8"))
+        except (OSError, ValueError) as exc:
+            print(f"error: proc_source_unreadable reason={type(exc).__name__}", file=sys.stderr)
+            return 2
+        facts = FixtureSource(document).read_memory_facts()
+        # Synthetic facts must never touch the real reservation ledger.
+        ledger = LaunchLedger(None, 0.0)
+        reserve = False
+    else:
+        facts = ProcSource().read_memory_facts()
+        ledger = LaunchLedger(
+            LaunchLedger.default_directory(
+                str(config["launch_ledger_dir"]), dict(os.environ), os.getuid()
+            ),
+            float(config["launch_reservation_seconds"]),
+            writable=not args.no_reserve,
+        )
+        reserve = not args.no_reserve
+
+    admission = admit_launch(facts, config, ledger, reserve)
+
+    # With a command to start, stdout belongs to that command.
+    reporter = Reporter(int(config["max_log_lines"]), stream=sys.stderr if command else None)
+    emit_admission(reporter, admission, ledger=ledger.status)
+    if args.json:
+        print(json.dumps(admission.to_state(), indent=2, sort_keys=True))
+    if not admission.admitted:
+        for line in explain_refusal(admission):
+            print(f"bibi-memory-guard: {line}", file=sys.stderr)
+        return admission.exit_code
+
+    if command:
+        sys.stdout.flush()
+        sys.stderr.flush()
+        try:
+            execvp(command[0], list(command))
+        except OSError as exc:
+            print(
+                f"error: launch_failed command={_scalar(command[0])} reason={exc.strerror}",
+                file=sys.stderr,
+            )
+            return 127 if exc.errno == errno.ENOENT else 126
+    return admission.exit_code
+
+
+def main(
+    argv: Sequence[str] | None = None,
+    execvp: Callable[[str, Sequence[str]], None] = os.execvp,
+) -> int:
+    arguments = list(sys.argv[1:] if argv is None else argv)
+    # Everything after the first `--` is the command to start once admitted.
+    command: list[str] = []
+    if "--" in arguments:
+        split = arguments.index("--")
+        arguments, command = arguments[:split], arguments[split + 1 :]
+
     parser = build_parser()
-    args = parser.parse_args(argv)
+    args = parser.parse_args(arguments)
+    if command and args.mode != "admit":
+        parser.error("a command after '--' is only accepted by the admit mode")
+    if args.mode == "admit" and "--" in (sys.argv[1:] if argv is None else argv) and not command:
+        parser.error("admit: '--' must be followed by the command to launch")
 
     try:
         config = load_config(args.config)
     except ConfigError as exc:
         print(f"error: config_invalid reason={exc}", file=sys.stderr)
         return 2
+
+    if args.mode == "admit":
+        return run_admit(args, config, command, execvp)
 
     if args.mode == "status":
         try:

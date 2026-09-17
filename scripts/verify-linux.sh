@@ -232,9 +232,23 @@ verify_shared_clojure_toolchain() {
   fi
 }
 
+# Reduce the guard's `admission:` line to the fields an operator acts on.
+admission_summary() {
+  local field summary=""
+  for field in $1; do
+    case "$field" in
+      level=* | mem_available_kb=* | projected_available_kb=* | required_floor_kb=* | swap_used_percent=* | reasons=*)
+        summary+="${summary:+ }$field"
+        ;;
+    esac
+  done
+  printf '%s' "${summary:-no decision recorded}"
+}
+
 verify_memory_safety_net() {
   local guard_path expected_version config_path state_file swap_path expected_swap_mb
   local actual_version guard_metadata timer_state level decision_summary swap_kb swap_mb
+  local admission_output admission_line admission_status
   guard_path=$(read_pin memory_guard_install_path)
   expected_version=$(read_pin memory_guard_version)
   config_path=$(read_pin memory_guard_config_path)
@@ -280,6 +294,33 @@ verify_memory_safety_net() {
     failed=1
   else
     echo "ok       memory guard observation"
+  fi
+
+  # Launch admission is a pure query here: it reserves nothing and starts
+  # nothing. A closed gate is the host's current state, not drift from the
+  # pins, so it is reported loudly without failing verification; a gate that
+  # cannot decide, or whose reviewed floor is missing, does fail.
+  if [[ -r "$config_path" ]] \
+    && ! grep -q "^launch_min_mem_available_percent=$(read_pin memory_guard_launch_min_mem_available_percent)$" "$config_path"; then
+    echo "invalid  memory guard policy does not carry its reviewed launch floor" >&2
+    failed=1
+  elif [[ $(read_pin memory_guard_launch_gate_enabled) != true ]]; then
+    echo "ok       launch admission disabled by reviewed policy"
+  else
+    admission_status=0
+    admission_output=$("$guard_path" admit --no-reserve --config "$config_path" 2>/dev/null) \
+      || admission_status=$?
+    admission_line=$(grep -m1 '^admission: ' <<<"$admission_output" || true)
+    case "$admission_status" in
+      0) printf 'ok       launch admission open: %s\n' "$(admission_summary "$admission_line")" ;;
+      75) printf 'warn     launch admission CLOSED, new workers are refused: %s\n' \
+        "$(admission_summary "$admission_line")" ;;
+      *)
+        printf 'invalid  launch admission cannot decide (exit %s): %s\n' \
+          "$admission_status" "$(admission_summary "$admission_line")" >&2
+        failed=1
+        ;;
+    esac
   fi
 
   if [[ $(read_pin memory_guard_enabled) == true ]]; then

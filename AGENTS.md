@@ -6,7 +6,7 @@ This file is the project's committed home for project-intrinsic agent knowledge:
 - `group_vars/all.yml` is authoritative for reviewed tool/package pins and checksums. Keep public system reconciliation in `site.yml`; the private Pi collection boundary and daily-user flow are documented in `README.md`.
 - Reuse `tasks/install-doctl.yml` and its hermetic harness rather than duplicating doctl installation logic.
 - Global npm tool versions (Pi, Wrangler, Firecrawl, AXI) are reconciled from the `group_vars/all.yml` pins only; the AXI tools install through `tasks/install-axi-tools.yml`, which refuses anything but an exact version pin. Bump a pin in a PR and let `scripts/test-provisioning.sh` prove clean install, upgrade, idempotency, and `bibi-verify`'s exact-version policy.
-- `scripts/bibi_memory_guard.py` may only kill a process tree it can prove is orphaned. Name matching is protective-only, ambiguity refuses, and memory pressure never authorises a kill; `tests/test_memory_guard.py` and the README's "Memory safety net" section hold the full policy. Change either only together.
+- `scripts/bibi_memory_guard.py` may only kill a process tree it can prove is orphaned. Name matching is protective-only, ambiguity refuses, and memory pressure never authorises a kill: its only answer to pressure from live workers is `admit` refusing the *next* launch from `/proc` facts, on a code path that must never inventory or signal a process. `tests/test_memory_guard.py`, `tests/test_launch_admission.py`, and the README's "Memory safety net" section hold the full policy. Change code, tests, and README only together.
 
 ## Maintaining this file
 

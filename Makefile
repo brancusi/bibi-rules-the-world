@@ -30,7 +30,7 @@ shell:
 	shellcheck templates/bibi-launcher.j2 templates/bibi-machine-update.j2 templates/bibi-motd.j2 templates/bibi-pi-extensions-update.j2 templates/bibi-pi-public-packages-update.j2 templates/bibi-private-capabilities-update.j2
 
 python:
-	python3 -m py_compile scripts/bibi_memory_guard.py tests/test_memory_guard.py
+	python3 -m py_compile scripts/bibi_memory_guard.py tests/test_memory_guard.py tests/test_launch_admission.py
 	python3 -m unittest discover --start-directory tests --pattern 'test_*.py'
 
 portable:

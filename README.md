@@ -178,8 +178,9 @@ advanced through `/updatefirstmate` instead of silently downgrading it.
 - the DigitalOcean bootstrap key is removed from root after it is copied to
   `bibi-admin` and `bibi`
 - UFW, fail2ban, and unattended security updates
-- a bounded 2 GiB swap file and a periodic memory guard that cleans only
-  ownership-proven browser-helper leaks
+- a bounded 2 GiB swap file and a memory guard that cleans only
+  ownership-proven browser-helper leaks and refuses a new worker launch when
+  the host has no headroom for it
 - GitHub Actions validation for YAML, Ansible, and cloud-init rendering
 
 Herdr is an experimental FirstMate backend. That choice is explicit in the
@@ -287,7 +288,8 @@ skill repository is checked out at a reviewed commit, and only the skills named
 in `cloudflare_skill_names` are linked into the daily user's Pi skill directory.
 A bounded swap file and the memory guard's
 service and timer are installed; provisioning runs the guard only in read-only
-report mode and never performs a cleanup. Provisioning does **not** authenticate
+report mode and as a pure launch admission query, and never performs a cleanup.
+Provisioning does **not** authenticate
 Cloudflare or doctl, and it does not fetch the private Pi Extensions repository.
 Do not interrupt provisioning midway.
 
@@ -407,7 +409,8 @@ the PTY session alive when WezTerm closes or SSH disconnects. Reconnect with
 As the daily user, verify the shared JDK 21/Clojure CLI resolution, command
 availability, exact global npm CLI versions, pinned public Pi packages, the
 official Cloudflare skill source and links, the exact doctl version and root
-ownership/mode, the memory guard version/policy/timer and the bounded swap area,
+ownership/mode, the memory guard version/policy/timer, launch admission, and the
+bounded swap area,
 FirstMate configuration, sudo separation, and (when installed) the private
 collection commit/package version. This clean login-shell check is
 the authoritative verification command:
@@ -434,7 +437,8 @@ cat /etc/bibi-provisioned-versions
    architectures and replace both archive checksums. Review exact npm and public
    Pi package versions before changing them. For Cloudflare skills or Pi
    Extensions, review and replace the full commit ref; never provision a moving
-   branch. The memory guard's grace periods, per-run cap, and swap size are
+   branch. The memory guard's grace periods, per-run cap, launch admission
+   floors and reserve, and swap size are
    safety bounds, not tuning knobs: `tasks/install-memory-guard.yml` and
    `tasks/install-swap-safety-net.yml` refuse values outside their reviewed
    range, and loosening one needs the same review as any other root change.
@@ -479,9 +483,12 @@ rebuilds eventually converge on the promoted commit.
 
 ## Memory safety net
 
-An 8 GiB Droplet with no swap ran out of headroom because browser QA left its
-helper processes behind. This section documents what the safety net does, what
-it refuses to do, and how to drive it.
+An 8 GiB Droplet has run out of memory headroom twice, for opposite reasons.
+First, with no swap, browser QA left its helper processes behind: a **leak**,
+answered by an ownership-proven reaper. Then, on 2026-09-17, a fleet of
+perfectly healthy workers simply outgrew the host and one more launch wedged
+it: **no leak at all**, answered by launch admission. This section documents
+what the safety net does, what it refuses to do, and how to drive it.
 
 ### What actually happened
 
@@ -517,7 +524,137 @@ That is the smallest counterfactual, and it is the only thing the guard treats
 as authorisation. Anything that would kill on RSS, age, name, or reparenting
 would have killed two live browser sessions.
 
-### The policy
+### The 2026-09-17 wedge: live workers, no leak
+
+The second incident had nothing to clean. About 15 live, legitimate worker
+lanes outgrew this 4-vCPU / 8 GiB host, one more worker was launched, and the
+host stopped answering SSH until it was rebooted. `sar` recorded all of it:
+
+| UTC | MemAvailable | Page cache | Swap used | Stalled on memory (`%smem-60`) | System CPU | Load |
+| --- | --- | --- | --- | --- | --- | --- |
+| 09-15, all day | 2.7 GiB | 1.6 GiB | 57% | 0 | ~15% | ~1 |
+| 09-16 06:10 | 2.4 GiB | 1.3 GiB | **89%** | 0 | ~15% | ~1 |
+| 09-16 10:10 | 2.5 GiB | 1.3 GiB | **100%** | 0 | ~15% | ~1 |
+| 09-17 04:20 | **0.65 GiB** | 0.55 GiB | 100% | 0.8 | ~15% | ~1 |
+| 09-17 05:00 | 0.39 GiB | 0.17 GiB | 100% | **15.7** (near miss, recovered) | - | - |
+| 09-17 07:30 | 0.73 GiB | 0.48 GiB | 100% | 0.0 | 15% | 1.9 |
+| 09-17 07:35 | *a new Claude worker is launched* | | | | | |
+| 09-17 07:40 | 0.26 GiB | **0.06 GiB** | 100% | 62.8 | 37% | 17.9 |
+| 09-17 08:00 | 0.26 GiB | 0.05 GiB | 100% | 92.9 | **94%** | 39 |
+| 09-17 08:50 | 0.28 GiB | 0.09 GiB | 100% | 97.6 | 97% | **85** |
+
+From 07:40 until the reboot the host read 1.5 GiB/s from disk (`pgpgin/s`) and
+took 13,000 major faults per second while swapping almost nothing (`pswpin/s`
+peaked at 19 and then stayed under 3). That combination is the signature. It
+was not swap thrash:
+
+| Link | What it is |
+| --- | --- |
+| Earliest defensible cause | **Aggregate working set of live workers.** Swap filled on 09-16 and never drained; on 09-17 04:20 MemAvailable fell to 0.65 GiB and commit reached 264%. By the guard's own thresholds the host had been `critical` for more than a day, but those alerts land in journald, the status file, and the login banner, and nothing reads any of them at the one moment they matter - a launch. |
+| Triggering launch | The 07:35 worker took the last ~0.5 GiB. It was an ordinary launch; any launch would have done it, and the 05:00 near miss shows an earlier one almost did. |
+| Wedge mechanism | With swap full, anonymous memory cannot be evicted, so the only reclaimable pages left were the fleet's own **executable and library text**. The kernel evicted them and the running workers faulted them straight back in, forever. Reclaim kept "succeeding" (`%vmeff` ~140), so the kernel never declared an OOM and never killed anything: a livelock at 97% system CPU, not a crash. |
+| Separate cgroup OOM | The Captain Channel was OOM-killed at 08:50 for exceeding **its own** `MemoryMax=256M`. That was 70 minutes into the storm, and the channel had already been failing since 07:40 with timeouts and `database is locked`. It was a victim inside its own cgroup. One unit hitting its own ceiling is not evidence of a host-wide leak, and nothing here treats it as one. |
+| Visible symptom | SSH and every pane hung, because `sshd`, shells, and the login banner needed the same evicted pages and the same four CPUs. |
+
+The leak reaper was enabled and behaved correctly: nothing on the host was an
+ownership-proven orphan, so it refused to kill anything, exactly as designed.
+No amount of cleanup authority would have been safe here, because every
+process holding memory was somebody's live, unlanded work. The only lever that
+is always safe is the one that was missing: **do not start the next worker.**
+
+### Launch admission
+
+`bibi-memory-guard admit` answers one question from `/proc/meminfo` and
+`/proc/pressure/memory`: *is there headroom for one more worker?* It is the same
+program, policy file, and status record as the reaper, so there is one memory
+monitor on the host, not two. It can refuse a launch. It cannot do anything else:
+that code path never walks the process table, never builds a signaller, and
+never sends a signal, and the tests assert all three.
+
+A launch is admitted only when **projected** headroom clears a floor:
+
+```text
+projected = MemAvailable - reservations of recently admitted workers - reserve for this one
+admit  <=>  projected >= floor% of MemTotal   and   PSI some avg60 < stall limit
+```
+
+| Setting (`memory_guard_launch_*`) | Default | Why |
+| --- | --- | --- |
+| `worker_reserve_kb` | 786432 (768 MiB) | One worker's working set. The 07:35 launch took ~0.5 GiB within five minutes and was still growing. |
+| `min_mem_available_percent` | 15 | Floor while swap is still a cushion. |
+| `min_mem_available_no_swap_percent` | 25 | Floor once swap is absent or past `swap_used_critical_percent` (60). MemAvailable is then mostly the fleet's executable text, and the cliff below it is sudden. |
+| `max_memory_stall_percent` | 10 | PSI `some avg60`, the figure `sar -q MEM` calls `%smem-60`. A lagging signal: it was 0.0 at 07:30, so it backs the headroom test rather than replacing it. |
+| `reservation_seconds` | 300 | How long an admitted launch keeps its reserve. |
+| `gate_enabled` | true | The explicit off switch. |
+
+Swap raises the floor instead of refusing outright, so a host with ample RAM and
+old cold pages parked in swap is still admitted.
+
+Replayed over every 10-minute `sar` sample from 09-13 to the reboot, the
+reviewed policy admits all 429 samples of 09-13 to 09-15 with `level=warn`
+(`swap-used-warn`), never refuses a healthy sample, and refuses every sample
+from 09-16 05:50 onward - **26 hours before the wedge, with 2.2 GiB still
+available** - including the 07:35 launch, with
+`projected-headroom-below-floor,swap-cushion-exhausted`.
+
+FirstMate dispatches in bursts, and a new worker needs minutes to grow into its
+working set, so five launches in a minute would all read the same comfortable
+MemAvailable. Each admission therefore leaves a short-lived **reservation**
+(`<epoch> <kb>` in the invoking user's `$XDG_RUNTIME_DIR/bibi-memory-guard/`)
+that later admissions subtract until `/proc` shows the memory for real. The
+ledger is an enhancement to the `/proc` facts, never a substitute: if it cannot
+be used the decision proceeds on `/proc` alone and reports `ledger=unavailable`.
+
+| Exit | Meaning |
+| --- | --- |
+| 0 | Admitted. `level` and `reasons` still carry any warning. |
+| 75 | Refused for headroom or stall (`EX_TEMPFAIL`): retry after memory is freed. |
+| 69 | Refused because `/proc/meminfo` could not be read (`EX_UNAVAILABLE`). |
+| 2 | The policy file is invalid. |
+
+**Unavailable telemetry refuses.** A reading with no `MemTotal` looks 100%
+available, and admitting on a number nobody measured is how a host gets tipped
+over. Refusing a launch loses nothing and can be retried; the scheduled run also
+raises `memory-telemetry-unavailable`. A kernel without PSI is not a telemetry
+failure: the decision is then made on `/proc/meminfo` alone.
+
+**A refusal never touches running work.** It starts nothing and stops nothing,
+and says so. Freeing memory is an operator decision: let workers finish, or
+deliberately land or stow one. A closed gate also never widens the reaper's
+kill eligibility - the tests run the same fleet under healthy and wedged memory
+and require identical verdicts.
+
+#### Binding a launcher to the gate
+
+The gate is a command prefix. It becomes the given command only when it admits:
+
+```bash
+# Start a worker only if the host has room for it (reserves its headroom).
+bibi-memory-guard admit -- claude "$brief"
+
+# Ask without launching or reserving anything.
+bibi-memory-guard admit --no-reserve
+```
+
+```text
+admission: decision=refuse level=critical mem_total_kb=8131792 mem_available_kb=769520 ... reasons=projected-headroom-below-floor,swap-cushion-exhausted
+bibi-memory-guard: launch REFUSED: this host has no safe headroom for another worker.
+bibi-memory-guard:   MemAvailable is 751 MB; one more worker is budgeted at 768 MB, leaving 0 MB.
+bibi-memory-guard:   The floor is 1985 MB (25% of RAM) because swap is 100% used and is no longer a cushion.
+bibi-memory-guard:   Nothing was started and nothing was stopped. This gate never kills a worker.
+```
+
+The decision line goes to stderr when a command follows, so stdout belongs to
+the launched command. Gate **new** worker launches only. Do not put it in front
+of resuming an existing worker, which is how unlanded work gets landed, or in
+front of the FirstMate primary, which is how an operator stows work under
+pressure. That distinction is why the gate is a prefix for the launcher rather
+than a shim around the `claude` or `pi` binaries: only the launcher knows whether
+a start is new work. FirstMate is consumed unmodified by this repository, so
+this repository installs the gate and proves it; the one-line binding in
+FirstMate's worker spawn path is a FirstMate change.
+
+### The reaper's policy
 
 `bibi-memory-guard` runs from a systemd timer every 15 minutes. Observation and
 destruction are deliberately separate.
@@ -636,7 +773,8 @@ killing it would be a guess about someone else's live work. The guard reports
 those and refuses. Reclaiming memory from an unproven process is an operator
 decision, not an automated one - which is also why low memory never widens
 eligibility. When memory is critical and nothing is provable, the guard says so
-loudly and does nothing.
+loudly, kills nothing, and closes launch admission so the pressure at least
+stops growing.
 
 ### Swap: why a file, not zram
 
@@ -670,10 +808,14 @@ invent one. Alerts land on the surfaces that already exist:
   per run
 - **`/var/lib/bibi-memory-guard/status.json`**, the last run's machine-readable
   record
-- **the login banner**, which prints MemAvailable, swap usage, and the guard's
-  last verdict
+- **the login banner**, which prints MemAvailable, swap usage, the guard's
+  last verdict, and whether launches are `open` or `CLOSED`
 - **`bibi-verify`**, which fails when the guard, its policy, its timer, or the
-  swap area drifts from the reviewed pins
+  swap area drifts from the reviewed pins, and warns when admission is closed
+- **the launcher itself**: every `admit` prints the current `level` and
+  `reasons`, so a launch hears `warn` long before it ever hears `refuse`.
+  The scheduled run records the same decision and raises
+  `launch-admission-closed`, so a closed gate is visible before anyone tries
 
 Nothing recorded on any of these surfaces contains a command line or an
 environment value. Command lines are read once for structural classification
@@ -694,6 +836,12 @@ sudo /usr/local/sbin/bibi-memory-guard report
 
 # Show the exact tree that would be terminated, and why every other tree is not.
 /usr/local/sbin/bibi-memory-guard dry-run
+
+# Would a new worker be admitted right now? Reserves nothing, starts nothing.
+/usr/local/sbin/bibi-memory-guard admit --no-reserve
+
+# The same facts from sysstat, for the history behind a refusal.
+sar -r -S -B -q MEM
 
 # Run a real cleanup pass now, out of schedule.
 sudo systemctl start bibi-memory-guard.service
@@ -723,6 +871,14 @@ ssh bibi-admin
 sudo systemctl disable --now bibi-memory-guard.timer
 ```
 
+To open launch admission unconditionally, set
+`memory_guard_launch_gate_enabled: false` and reconcile; `admit` then always
+admits with `reasons=launch-gate-disabled`. Floors and the reserve are bounded
+by `tasks/install-memory-guard.yml`, so the gate cannot be tuned into a no-op
+by accident - turning it off has to be this explicit switch. A single launch
+can always bypass the gate by not using the prefix; that is an operator
+decision and is deliberately not automated.
+
 To remove the swap safety net, set `swap_manage_system: false` and reconcile,
 then retire the area by hand:
 
@@ -733,7 +889,7 @@ sudo rm -f /swapfile /etc/sysctl.d/60-bibi-memory.conf
 ```
 
 Reconciliation itself is never destructive: applying `site.yml` installs the
-guard and runs it only in read-only report mode.
+guard and runs it only in read-only report mode and as a pure admission query.
 
 ### Expected overhead
 
@@ -746,6 +902,13 @@ of CPU at `Nice=10` and idle I/O priority, capped by `MemoryMax=192M` and
 negligible. Runs cannot overlap: systemd refuses a concurrent start of the unit,
 and the guard also holds an `flock` so a manual one-shot cannot race a scheduled
 one.
+
+`admit` is far cheaper, because it has to stay usable on a host that is already
+struggling: it reads `/proc/meminfo` and `/proc/pressure/memory`, plus a ledger
+of at most 256 short lines, and never touches the process table. It runs
+unprivileged in tens of milliseconds. Its ledger lock is non-blocking with a
+bounded one-second retry, after which the decision proceeds on `/proc` alone,
+so the gate can never hang a launch on its own lock.
 
 ## Forward a development port without exposing it
 

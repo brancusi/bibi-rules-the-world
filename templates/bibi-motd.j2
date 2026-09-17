@@ -28,6 +28,8 @@ if [[ -r "$state_file" ]] && command -v jq >/dev/null 2>&1; then
     + " checked=" + (.timestamp | todate)
     + " trees=" + ((.trees | length) | tostring)
     + " cleaned=" + ((.cleanups | length) | tostring)
+    + " launches=" + (if .admission.decision == "admit" then "open"
+        elif .admission.decision == "refuse" then "CLOSED" else "unknown" end)
     + (if (.alerts | length) > 0 then " alerts=" + (.alerts | join(",")) else "" end)
   ' "$state_file" 2>/dev/null || true)
 else
