@@ -1,10 +1,12 @@
 ---
-# Declarative installation of the memory observer and browser-leak reaper.
+# Declarative installation of the memory observer, browser-leak reaper, and
+# launch admission gate.
 #
 # The guard's safety argument rests entirely on evidence it reads at run time,
 # so this task file installs the decision logic, its reviewed thresholds, and
 # the systemd service + timer that runs it. Reconciliation itself is never
-# destructive: it only ever executes the guard in read-only report mode.
+# destructive: it only ever executes the guard in read-only report mode and as
+# a pure admission query.
 
 - name: Refuse an unreviewed cleanup policy
   ansible.builtin.assert:
@@ -20,6 +22,26 @@
       The memory guard policy is outside its reviewed bounds. Grace periods
       protect live sessions and the per-run cap bounds blast radius; both must
       stay conservative.
+
+- name: Refuse an unreviewed launch admission policy
+  ansible.builtin.assert:
+    that:
+      - memory_guard_launch_worker_reserve_kb | int >= 262144
+      - memory_guard_launch_min_mem_available_percent | int >= 10
+      - memory_guard_launch_min_mem_available_percent | int <= 50
+      - >-
+        memory_guard_launch_min_mem_available_no_swap_percent | int
+        >= memory_guard_launch_min_mem_available_percent | int
+      - memory_guard_launch_min_mem_available_no_swap_percent | int <= 60
+      - memory_guard_launch_max_memory_stall_percent | float >= 1
+      - memory_guard_launch_max_memory_stall_percent | float <= 50
+      - memory_guard_launch_reservation_seconds | int >= 60
+      - memory_guard_launch_reservation_seconds | int <= 1800
+    fail_msg: >-
+      The launch admission policy is outside its reviewed bounds. The reserve
+      and the floors are what keep one more worker from evicting the running
+      fleet's executable pages; disable the gate explicitly with
+      memory_guard_launch_gate_enabled rather than tuning it into a no-op.
 
 - name: Create the memory guard state directory
   ansible.builtin.file:
@@ -102,6 +124,30 @@
       - >-
         memory_guard_report.stdout is search('^result: mode=report', multiline=True)
     fail_msg: "The installed memory guard did not produce a memory observation."
+
+# A pure admission query proves the gate parses its policy and reads this
+# host's /proc. A busy host may legitimately answer "refuse" (75); only a gate
+# that cannot decide at all fails reconciliation. It reserves nothing.
+- name: Exercise launch admission as a pure query
+  ansible.builtin.command:
+    argv:
+      - "{{ memory_guard_install_path }}"
+      - admit
+      - --no-reserve
+      - --config
+      - "{{ memory_guard_config_path }}"
+  register: memory_guard_admission
+  changed_when: false
+  failed_when: memory_guard_admission.rc not in [0, 75]
+
+- name: Refuse a gate that cannot reach an admission decision
+  ansible.builtin.assert:
+    that:
+      - >-
+        memory_guard_admission.stdout is search('^admission: decision=(admit|refuse) ', multiline=True)
+      - >-
+        memory_guard_report.stdout is search('^admission: decision=(admit|refuse) ', multiline=True)
+    fail_msg: "The installed memory guard did not produce a launch admission decision."
 
 - name: Reload systemd for changed memory guard units
   ansible.builtin.systemd_service:

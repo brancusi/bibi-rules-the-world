@@ -164,7 +164,9 @@ no_mistakes_darwin_arm64_sha256: "a7c88b1ab2fba96b30ccc64ca3e95676ae3c3d8625a32d
 # reparented chrome-devtools-axi bridges, chrome-devtools-mcp processes, their
 # watchdogs, and headless Chromium trees resident on this 8 GiB swapless host.
 # README.md documents the policy, the protected cases, and the rollback path.
-memory_guard_version_pin: "1.0.0"
+# 1.1.0 (2026-09-17) adds launch admission after the live worker fleet, with no
+# leak anywhere, filled swap and one more launch wedged the host in reclaim.
+memory_guard_version_pin: "1.1.0"
 memory_guard_enabled: true
 memory_guard_manage_system: true
 memory_guard_source: "scripts/bibi_memory_guard.py"
@@ -201,6 +203,20 @@ memory_guard_mem_available_warn_percent: 20
 memory_guard_mem_available_critical_percent: 10
 memory_guard_swap_used_warn_percent: 25
 memory_guard_swap_used_critical_percent: 60
+
+# Launch admission: may refuse a new worker launch, and nothing else. Read by
+# `bibi-memory-guard admit` from /proc/meminfo and /proc/pressure/memory.
+# A launch is admitted only when MemAvailable, less the reserve for it and for
+# workers admitted in the last memory_guard_launch_reservation_seconds, still
+# clears the floor. The stricter floor applies once swap is absent or past
+# memory_guard_swap_used_critical_percent, because it is then no cushion.
+# The stall limit is PSI `some avg60`, the figure `sar -q MEM` calls %smem-60.
+memory_guard_launch_gate_enabled: true
+memory_guard_launch_worker_reserve_kb: 786432
+memory_guard_launch_min_mem_available_percent: 15
+memory_guard_launch_min_mem_available_no_swap_percent: 25
+memory_guard_launch_max_memory_stall_percent: 10
+memory_guard_launch_reservation_seconds: 300
 
 # Destructive eligibility: independent of memory pressure by design.
 memory_guard_leak_min_age_seconds: 3600

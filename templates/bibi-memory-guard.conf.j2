@@ -3,6 +3,7 @@
 # Observation thresholds raise alerts. Eligibility thresholds authorise a kill.
 # The two sets are deliberately independent: low memory never lowers the bar
 # for terminating a process, and a proven leak is cleaned before any pressure.
+# Launch admission thresholds can refuse a new worker launch and nothing else.
 
 owner_user={{ bibi_agent_user }}
 
@@ -18,6 +19,14 @@ mem_available_warn_percent={{ memory_guard_mem_available_warn_percent }}
 mem_available_critical_percent={{ memory_guard_mem_available_critical_percent }}
 swap_used_warn_percent={{ memory_guard_swap_used_warn_percent }}
 swap_used_critical_percent={{ memory_guard_swap_used_critical_percent }}
+
+# Launch admission. Refuses a launch; never signals a process.
+launch_gate_enabled={{ memory_guard_launch_gate_enabled | bool | lower }}
+launch_worker_reserve_kb={{ memory_guard_launch_worker_reserve_kb }}
+launch_min_mem_available_percent={{ memory_guard_launch_min_mem_available_percent }}
+launch_min_mem_available_no_swap_percent={{ memory_guard_launch_min_mem_available_no_swap_percent }}
+launch_max_memory_stall_percent={{ memory_guard_launch_max_memory_stall_percent }}
+launch_reservation_seconds={{ memory_guard_launch_reservation_seconds }}
 
 # Destructive eligibility.
 leak_min_age_seconds={{ memory_guard_leak_min_age_seconds }}
