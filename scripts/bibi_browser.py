@@ -5,6 +5,7 @@ No attach/reap command: cleanup authority comes only from this invocation's
 child handle and freshly allocated AXI session, never a caller-supplied PID.
 """
 import argparse
+import errno
 import fcntl
 import json
 import os
@@ -239,11 +240,16 @@ class BrowserRun:
     def call(self, args, timeout=20, input_text=None):
         self.log_number += 1
         log = self.evidence / f'command-{self.log_number}.log'
+        errors = self.evidence / f'command-{self.log_number}.stderr.log'
+        logs = (log, errors)
         is_start = args == [self.config['axi'], 'start']
-        with log.open('w') as output:
+        # stdout is command data, not a combined transcript. Official Chrome's
+        # --version can emit a channel warning on stderr before its version.
+        # Preserve both streams without letting diagnostics corrupt validation.
+        with log.open('w') as output, errors.open('w') as error_output:
             try:
                 child = subprocess.Popen(args, env=self.env, text=True, stdin=subprocess.PIPE,
-                                         stdout=output, stderr=output)
+                                         stdout=output, stderr=error_output)
                 try:
                     child.stdin.write(input_text or '')
                     child.stdin.close()
@@ -251,10 +257,10 @@ class BrowserRun:
                     while child.poll() is None:
                         if is_start:
                             self.startup.observe(child)
-                        if time.monotonic() >= deadline or log.stat().st_size > 1048576:
+                        if time.monotonic() >= deadline or sum(p.stat().st_size for p in logs) > 1048576:
                             raise BrowserError(f'Command deadline/output bound ({timeout}s, 1 MiB); inspect {log}')
                         time.sleep(0.05)
-                    if log.stat().st_size > 1048576:
+                    if sum(p.stat().st_size for p in logs) > 1048576:
                         raise BrowserError(f'Command exceeded 1 MiB output; inspect {log}')
                 finally:
                     if is_start:
@@ -268,14 +274,46 @@ class BrowserRun:
                             child.wait(timeout=2)
             finally:
                 # Retain bounded raw diagnostics even from a noisy failing tool.
-                if log.stat().st_size > 1048576:
-                    with log.open('r+b') as bounded:
-                        bounded.truncate(1048576)
+                if sum(p.stat().st_size for p in logs) > 1048576:
+                    for path in logs:
+                        if path.stat().st_size > 524288:
+                            with path.open('r+b') as bounded:
+                                bounded.truncate(524288)
         with log.open('rb') as stream:
             text = stream.read(65536).decode(errors='replace')
         if child.returncode:
-            raise BrowserError(f'Command failed ({child.returncode}): {diagnostic(text)}; evidence {log}')
+            with errors.open('rb') as stream:
+                details = stream.read(65536).decode(errors='replace')
+            raise BrowserError(f'Command failed ({child.returncode}): {diagnostic(text + details)}; evidence {log}, {errors}')
         return text
+
+    def verify_chrome_version(self, executable):
+        # Package identity includes the Debian revision; --version does not.
+        # Keep the installer's exact/no-downgrade policy at runtime as well.
+        expected_package = self.config['version']
+        package = self.call(['dpkg-query', '-W', '-f=${Version}', 'google-chrome-stable']).strip()
+        if package != expected_package:
+            raise BrowserError(f'Chrome package version drift: expected {expected_package}, found {diagnostic(package)}; '
+                               'review group_vars/all.yml; do not downgrade security updates')
+        expected_binary = 'Google Chrome ' + expected_package.rsplit('-', 1)[0]
+        version = self.call([str(executable), '--version']).strip()
+        if version != expected_binary:
+            raise BrowserError(f'Chrome executable version drift: expected {expected_binary}, found {diagnostic(version)}; '
+                               'review group_vars/all.yml; do not downgrade security updates')
+        return version
+
+    def mcp_entrypoint(self):
+        # AXI's SDK transport drops TMPDIR and MCP-specific environment keys.
+        # Its supported MCP_PATH accepts a script: add native MCP CLI options
+        # here, then import the already version-verified entrypoint unchanged.
+        # This does not widen the filesystem root or patch installed packages.
+        entrypoint = self.evidence / 'mcp-entrypoint.mjs'
+        entrypoint.write_text(
+            'process.argv.push(' + json.dumps('--workspace=' + str(self.evidence)) +
+            ', "--no-usage-statistics");\n'
+            'process.env.CHROME_DEVTOOLS_MCP_NO_UPDATE_CHECKS = "1";\n'
+            'await import(' + json.dumps(Path(self.config['mcp']).as_uri()) + ');\n')
+        return entrypoint
 
     def start(self):
         executable = Path(self.config['executable'])
@@ -289,9 +327,7 @@ class BrowserRun:
             actual = json.loads(metadata.read_text())
             if actual.get('name') != package or actual.get('version') != self.config[key + '_version']:
                 raise BrowserError(f'{package} version drift; reconcile reviewed browser pins')
-        version = self.call([str(executable), '--version']).strip()
-        if version != 'Google Chrome ' + self.config['version'].rsplit('-', 1)[0]:
-            raise BrowserError('Chrome version drift; review/bump group_vars/all.yml; do not downgrade security updates')
+        version = self.verify_chrome_version(executable)
         # Reuse the repo's existing admission path (no process inventory/signals).
         # Ship the same source alongside this helper so older host daemons need
         # not be changed by this narrowly scoped browser installation.
@@ -323,10 +359,7 @@ class BrowserRun:
         session_parent(self.home / '.chrome-devtools-axi' / 'sessions')
         self.session_dir = self.home / '.chrome-devtools-axi' / 'sessions' / self.session
         self.session_dir.mkdir(mode=0o700)  # exclusive: existing identity refuses
-        self.env = child_environment(self.session, bridge_port, self.url, self.config['mcp'])
-        # MCP 1.9 defaults its filesystem root to os.tmpdir(). Narrow that native
-        # boundary to our private evidence directory; never enable unrestricted paths.
-        self.env['TMPDIR'] = str(self.evidence)
+        self.env = child_environment(self.session, bridge_port, self.url, self.mcp_entrypoint())
         self.start_attempted = True
         self.call([self.config['axi'], 'start'])
         self.start_succeeded = True
@@ -413,7 +446,17 @@ class BrowserRun:
                     self.browser.kill()
                     self.browser.wait(timeout=5)
         if safe:
-            shutil.rmtree(self.profile)
+            # The reaped Chrome parent can leave sandbox children finishing
+            # profile writes briefly. Retry only this run's private directory;
+            # never infer kill authority from a profile or sweep other runs.
+            deadline = time.monotonic() + 2
+            while self.profile.exists():
+                try:
+                    shutil.rmtree(self.profile)
+                except OSError as exc:
+                    if exc.errno not in (errno.ENOTEMPTY, errno.ENOENT) or time.monotonic() >= deadline:
+                        raise
+                    time.sleep(0.05)
             if self.session_dir:
                 shutil.rmtree(self.session_dir)
         else:

@@ -1,4 +1,5 @@
 """Hermetic browser ownership/lifetime tests. Not a real Chrome smoke receipt."""
+import errno
 import importlib.util
 import json
 import os
@@ -89,6 +90,39 @@ class BrowserTests(unittest.TestCase):
         self.assertTrue(screenshot.exists())
         b.cleanup()
 
+    def test_private_mcp_options_survive_sdk_filtered_environment(self):
+        run = self.run_object()
+        fake = self.home / 'reviewed-mcp.mjs'
+        fake.write_text('console.log(JSON.stringify({args: process.argv.slice(2), '
+                        'updates: process.env.CHROME_DEVTOOLS_MCP_NO_UPDATE_CHECKS}));')
+        run.config['mcp'] = str(fake)
+        # Match AXI's SDK transport: no TMPDIR or MCP-specific variables survive.
+        env = {key: os.environ[key] for key in ('HOME', 'LOGNAME', 'PATH', 'SHELL', 'TERM', 'USER') if key in os.environ}
+        result = subprocess.run(['node', str(run.mcp_entrypoint()), '--browserUrl=http://127.0.0.1:4321'],
+                                env=env, capture_output=True, text=True, check=True, timeout=10)
+        observed = json.loads(result.stdout)
+        self.assertEqual(observed['args'], ['--browserUrl=http://127.0.0.1:4321',
+                                          '--workspace=' + str(run.evidence), '--no-usage-statistics'])
+        self.assertEqual(observed['updates'], '1')
+        self.assertNotIn('--allowUnrestrictedPaths', observed['args'])
+        run.cleanup()
+
+    def test_profile_cleanup_retries_only_owned_shutdown_race(self):
+        run, other = self.run_object(), self.run_object()
+        real_remove = browser.shutil.rmtree
+        calls = []
+        def finishing_write(path):
+            calls.append(path)
+            if len(calls) == 1:
+                raise OSError(errno.ENOTEMPTY, 'Directory not empty: Default')
+            return real_remove(path)
+        with patch.object(browser.shutil, 'rmtree', side_effect=finishing_write):
+            run.cleanup()
+        self.assertEqual(calls, [run.profile, run.profile])
+        self.assertTrue(other.profile.exists())
+        self.assertFalse(run.profile.exists())
+        other.cleanup()
+
     def test_one_slot_across_projects_released_by_owner(self):
         slot = browser.acquire_slot(self.home)
         try:
@@ -155,7 +189,7 @@ class BrowserTests(unittest.TestCase):
             child.poll.return_value = -6
             return child
         with patch.object(browser.os, 'access', return_value=True), \
-                patch.object(run, 'call', side_effect=['Google Chrome 153.0.8010.52', 'admitted']), \
+                patch.object(run, 'call', side_effect=['153.0.8010.52-1', 'Google Chrome 153.0.8010.52', 'admitted']), \
                 patch.object(browser.subprocess, 'Popen', side_effect=refused_launch):
             with self.assertRaisesRegex(browser.BrowserError, 'No usable sandbox.*Ubuntu AppArmor'):
                 run.start()
@@ -178,12 +212,39 @@ class BrowserTests(unittest.TestCase):
         self.metadata()
         run = self.run_object()
         with patch.object(browser.os, 'access', return_value=True), \
-                patch.object(run, 'call', side_effect=['Google Chrome 153.0.8010.52', browser.BrowserError('refused headroom')]) as call, \
+                patch.object(run, 'call', side_effect=['153.0.8010.52-1', 'Google Chrome 153.0.8010.52', browser.BrowserError('refused headroom')]) as call, \
                 patch.object(browser.subprocess, 'Popen') as launch:
             with self.assertRaisesRegex(browser.BrowserError, 'headroom'):
                 run.start()
             self.assertEqual(call.call_args.args[0][-2:], ['admit', '--no-reserve'])
             launch.assert_not_called()
+
+    def test_command_stdout_is_data_and_stderr_is_retained(self):
+        run = self.run_object()
+        text = run.call([sys.executable, '-c',
+                        'import sys; print("Read channel stable", file=sys.stderr); print("Google Chrome 153.0.8010.52 ")'])
+        self.assertEqual(text, 'Google Chrome 153.0.8010.52 \n')
+        self.assertEqual((run.evidence / 'command-1.stderr.log').read_text(), 'Read channel stable\n')
+        with self.assertRaisesRegex(browser.BrowserError, 'real connection failure'):
+            run.call([sys.executable, '-c', 'import sys; print("real connection failure", file=sys.stderr); sys.exit(1)'])
+        # stderr also counts toward the aggregate output bound.
+        with self.assertRaisesRegex(browser.BrowserError, 'output'):
+            run.call([sys.executable, '-c', 'import sys; print("x" * 2000000, file=sys.stderr)'])
+        self.assertLessEqual(sum(p.stat().st_size for p in run.evidence.glob('command-3*')), 1048576)
+        run.cleanup()
+
+    def test_version_gate_rejects_real_binary_and_package_revision_drift(self):
+        run = self.run_object()
+        for package, executable, message in (
+                ('153.0.8010.52-2', 'Google Chrome 153.0.8010.52', 'package version drift'),
+                ('153.0.8010.52-1', 'Google Chrome 154.0.8010.52', 'executable version drift'),
+                ('153.0.8010.52-1', 'Google Chrome 152.0.8010.52', 'executable version drift'),
+                ('153.0.8010.52-1', 'warning\nGoogle Chrome 153.0.8010.52', 'executable version drift')):
+            with self.subTest(package=package, executable=executable):
+                with patch.object(run, 'call', side_effect=[package, executable]):
+                    with self.assertRaisesRegex(browser.BrowserError, message):
+                        run.verify_chrome_version(Path(self.config['executable']))
+        run.cleanup()
 
     def test_bounded_command_failure_and_sanitized_diagnostic(self):
         run = self.run_object()

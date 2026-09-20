@@ -241,19 +241,29 @@ Do not glob-delete other projects' runs. Project commands' output is captured in
 that directory, not broadcast. Never copy cookies, personal profiles or provider
 credentials. Use each project's own restricted test accounts and synthetic data;
 there is no global shared login/password. Screenshots and logs may contain test
-data; share only reviewed, redacted evidence. MCP 1.9's native filesystem root is
-its OS temp directory: the wrapper sets `TMPDIR` to this private evidence
-directory, not unrestricted filesystem access. Put synthetic upload fixtures
-there and write screenshots there; outside file paths intentionally refuse.
+data; share only reviewed, redacted evidence. MCP 1.9's default filesystem root
+is its OS temp directory, and AXI's SDK transport filters out `TMPDIR` and MCP
+telemetry environment settings. The helper uses AXI's supported `MCP_PATH`
+interface with a tiny private per-run entrypoint that imports the version-checked
+MCP unchanged, passing native `--workspace=<private-evidence-directory>` and
+`--no-usage-statistics` options. No global package is patched or unrestricted
+filesystem access granted. Put synthetic upload fixtures there and write
+screenshots there; outside file paths intentionally refuse.
 
 `bibi-verify` invokes this preflight when the browser profile or browser-only
 receipt is present. A successful package/unit/CI test is **not** a successful host
 smoke: require the unprivileged launch/navigation/JS/screenshot/cleanup receipt.
 Missing executable, sandbox refusal and AXI connection failure are distinct
-errors. Chrome AXI 0.1.31's `pages` formatter can turn an underlying MCP
-`list_pages` error into an empty list; never interpret `pages: 0` as readiness.
-The helper checks positive end-to-end results and retains underlying startup/tool
-errors. The formatter's missing `isError` handling is a separate upstream AXI
+errors. Command stdout is validated separately from retained stderr diagnostics:
+Chrome can emit a benign channel warning to stderr even for `--version`. The
+preflight compares the full Debian package version (including `-1`, etc.) to
+the receipt, and compares the executable's upstream version without that package
+revision. Both are exact checks; warnings are not version drift, and neither a
+newer binary nor a different package revision is silently accepted. Chrome AXI 0.1.31's `pages` formatter can turn an underlying MCP
+`list_pages` error into an empty list; its screenshot formatter can likewise
+print a destination even when MCP refused the write. Never interpret `pages: 0`
+or a printed screenshot path as proof. The helper checks positive end-to-end
+results and the actual PNG file, and retains startup/tool diagnostics. The formatter's missing `isError` handling is a separate upstream AXI
 issue; this repository does not patch globally installed code.
 
 ### Browser security updates

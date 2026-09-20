@@ -24,6 +24,19 @@ class ActionModule(ActionBase):
         if previous and tuple(map(int, previous.replace('-', '.').split('.'))) > tuple(map(int, wanted.replace('-', '.').split('.'))):
             raise AnsibleActionFail('Refusing downgrade')
         installed.write_text(wanted)
+        # Official Linux Chrome prints a warning on stderr and a trailing-space
+        # upstream version on stdout. Keep that real install-to-preflight shape.
+        executable = root / 'chrome'
+        executable.write_text('''#!/usr/bin/env python3
+from pathlib import Path
+import sys
+assert sys.argv[1:] == ['--version']
+print('[0920/092507.494122:WARNING:chrome/app/chrome_main_linux.cc:84] '
+      'Read channel stable from /opt/google/chrome/CHROME_VERSION_EXTRA', file=sys.stderr)
+version = Path(__file__).with_name('version').read_text().rsplit('-', 1)[0]
+print('Google Chrome ' + version + ' ')
+''')
+        executable.chmod(0o755)
         (root / 'chrome-sandbox').touch()
         (root / 'chrome-sandbox').chmod(0o4755)
         return {'changed': previous != wanted, 'fixture_only': True}
