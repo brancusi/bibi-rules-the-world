@@ -89,6 +89,22 @@ lavish_axi_integrity: "sha512-w57Pdna5MmsgHTewyhOPkuzwbCe98WqR6yrvf/r+fxs1qor2yp
 tasks_axi_integrity: "sha512-FxssEW7+MuUNHWJ7uhdGrRsBDev/Zw5NutUBHcf8r/npG6z9+NfUUIeXdcdDHrC9ixEKOqQ9Uomay2TLpDB6Eg=="
 quota_axi_integrity: "sha512-RTuWSwKy8SseMxg1enIaNu6PPV2YTjEZVvYTRLkB2rIa5PJs8cgr/6rCWZsbr7cEePEp9VFImb75UXS3+T3f/g=="
 
+# Chrome Stable amd64 from Google's HTTPS Debian index; downloaded bytes matched
+# this SHA-256 on 2026-09-20. No Playwright cache or floating "current" URL.
+# Review security releases promptly and bump version/hash together; never downgrade
+# a newer system browser. The browser profile deliberately refuses Linux ARM.
+chrome_version: "153.0.8010.52-1"
+chrome_deb_sha256: "29e0e4b5af01213915ffdb7f4e49a11956dc5fc591165c85af8688dcdff907ac"
+chrome_deb_base_url: "https://dl.google.com/linux/chrome/deb/pool/main/g/google-chrome-stable"
+chrome_cache_dir: "/var/cache/bibi/chrome"
+chrome_executable: "/opt/google/chrome/chrome"
+browser_install_dir: "/usr/local/lib/bibi/browser"
+browser_command_path: "/usr/local/bin/bibi-browser"
+browser_config_path: "/etc/bibi-browser.json"
+# AXI's native MCP_PATH avoids its implicit npx @latest bootstrap.
+browser_mcp_package: "chrome-devtools-mcp@1.9.0"
+browser_mcp_integrity: "sha512-RnzXoJiUQ44hpOihWk90uOhLD/CnwDkDy0ldHMZONJ2nYQ+dWN1fq1luHHqyd+7FuYnyIlCY6uTThbN5ut9kSQ=="
+
 # Public Pi packages are reconciled through Pi's official package installer as
 # the daily user. Exact npm versions are retained in Pi settings.
 pi_public_packages:

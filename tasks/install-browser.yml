@@ -1,0 +1,88 @@
+---
+- name: Validate the browser-only tool selection
+  ansible.builtin.assert:
+    that:
+      - browser_axi_packages | length == 2
+      - browser_axi_packages[0] is match('^chrome-devtools-axi@[0-9]+\.[0-9]+\.[0-9]+$')
+      - browser_mcp_package is match('^chrome-devtools-mcp@[0-9]+\.[0-9]+\.[0-9]+$')
+      - browser_axi_packages[1] == browser_mcp_package
+    fail_msg: "Only the exact reviewed Chrome AXI and MCP packages belong in browser-only reconciliation."
+
+- name: Install the official Chrome package
+  ansible.builtin.include_tasks: install-chrome-package.yml
+
+- name: Verify the pinned browser tools against the official npm registry
+  become: true
+  become_user: "{{ bibi_agent_user }}"
+  ansible.builtin.command:
+    argv: [npm, view, "{{ item.package }}", dist.integrity, --registry=https://registry.npmjs.org]
+  environment: &browser_environment
+    HOME: "{{ bibi_agent_home }}"
+    PATH: "{{ bibi_agent_home }}/.local/bin:/usr/local/bin:/usr/bin:/bin"
+    npm_config_registry: https://registry.npmjs.org
+  loop:
+    - {package: "{{ browser_axi_packages[0] }}", integrity: "{{ chrome_devtools_axi_integrity }}"}
+    - {package: "{{ browser_mcp_package }}", integrity: "{{ browser_mcp_integrity }}"}
+  register: browser_tool_registry
+  changed_when: false
+  failed_when: browser_tool_registry.stdout != item.integrity
+
+- name: Reconcile only the browser AXI and its pinned MCP dependency
+  ansible.builtin.include_tasks: install-axi-tools.yml
+  vars:
+    axi_install_user: "{{ bibi_agent_user }}"
+    axi_environment: *browser_environment
+    axi_packages: "{{ browser_axi_packages }}"
+
+- name: Create the browser helper directory
+  ansible.builtin.file:
+    path: "{{ browser_install_dir }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Install browser preflight and the existing read-only admission implementation
+  ansible.builtin.copy:
+    src: "{{ item }}"
+    dest: "{{ browser_install_dir }}/{{ item | basename }}"
+    owner: root
+    group: root
+    mode: "0644"
+  loop:
+    - scripts/bibi_browser.py
+    - scripts/bibi_memory_guard.py
+
+- name: Install the browser command
+  ansible.builtin.copy:
+    dest: "{{ browser_command_path }}"
+    owner: root
+    group: root
+    mode: "0755"
+    content: |
+      #!/bin/sh
+      exec /usr/bin/python3 {{ browser_install_dir | quote }}/bibi_browser.py --config {{ browser_config_path | quote }} "$@"
+
+- name: Install the browser-aware verifier from its existing source owner
+  ansible.builtin.copy:
+    src: "{{ item.src }}"
+    dest: "{{ bibi_agent_home }}/.local/bin/{{ item.dest }}"
+    owner: "{{ bibi_agent_user }}"
+    group: "{{ bibi_agent_user }}"
+    mode: "0755"
+  loop:
+    - {src: scripts/verify.sh, dest: bibi-verify}
+    - {src: scripts/verify-linux.sh, dest: verify-linux.sh}
+
+- name: Record browser-only pins without overwriting the machine receipt
+  ansible.builtin.copy:
+    dest: "{{ browser_config_path }}"
+    owner: root
+    group: root
+    mode: "0644"
+    content: |
+      {{ {'executable': chrome_executable, 'version': chrome_version,
+          'axi': bibi_agent_home ~ '/.local/bin/chrome-devtools-axi',
+          'axi_version': browser_axi_packages[0].split('@')[1],
+          'mcp': bibi_agent_home ~ '/.local/lib/node_modules/chrome-devtools-mcp/build/src/bin/chrome-devtools-mcp.js',
+          'mcp_version': browser_mcp_package.split('@')[1]} | to_nice_json }}

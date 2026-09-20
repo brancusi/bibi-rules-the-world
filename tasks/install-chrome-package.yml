@@ -1,0 +1,56 @@
+---
+- name: Require the supported official Chrome platform and exact pins
+  ansible.builtin.assert:
+    that:
+      - ansible_distribution == 'Ubuntu'
+      - ansible_distribution_version is version('24.04', '>=')
+      - ansible_architecture == 'x86_64'
+      - chrome_version is match('^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+-[0-9]+$')
+      - chrome_deb_sha256 is match('^[a-f0-9]{64}$')
+    fail_msg: "Browser installation requires Ubuntu 24.04+ x86_64. Linux ARM needs a separately reviewed native sandbox-capable browser."
+
+- name: Create the Chrome artifact cache
+  ansible.builtin.file:
+    path: "{{ chrome_cache_dir }}"
+    state: directory
+    owner: "{{ browser_system_owner | default('root') }}"
+    group: "{{ browser_system_group | default('root') }}"
+    mode: "0755"
+
+- name: Download the checksum-pinned official Chrome Debian package
+  ansible.builtin.get_url:
+    url: "{{ chrome_deb_base_url }}/google-chrome-stable_{{ chrome_version }}_amd64.deb"
+    dest: "{{ chrome_cache_dir }}/google-chrome-stable_{{ chrome_version }}_amd64.deb"
+    checksum: "sha256:{{ chrome_deb_sha256 }}"
+    owner: "{{ browser_system_owner | default('root') }}"
+    group: "{{ browser_system_group | default('root') }}"
+    mode: "0644"
+
+# apt's deb path is idempotent and refuses a newer installed version by default.
+# Do not use allow_downgrade or install a hand-copied setuid sandbox helper.
+- name: Install official Chrome and its standard package dependencies and sandbox
+  ansible.builtin.apt:
+    deb: "{{ chrome_cache_dir }}/google-chrome-stable_{{ chrome_version }}_amd64.deb"
+    allow_downgrade: false
+    install_recommends: false
+
+- name: Verify the installed Chrome package version
+  ansible.builtin.command:
+    argv: [dpkg-query, -W, '-f=${Version}', google-chrome-stable]
+  register: chrome_installed
+  changed_when: false
+  failed_when: chrome_installed.stdout != chrome_version
+
+- name: Inspect the standard Chrome sandbox helper
+  ansible.builtin.stat:
+    path: "{{ chrome_executable | dirname }}/chrome-sandbox"
+  register: chrome_sandbox
+
+- name: Verify the package-owned sandbox helper
+  ansible.builtin.assert:
+    that:
+      - chrome_sandbox.stat.isreg | default(false)
+      - not chrome_sandbox.stat.islnk | default(true)
+      - chrome_sandbox.stat.pw_name == (browser_system_owner | default('root'))
+      - chrome_sandbox.stat.mode == '4755'
+    fail_msg: "Official Chrome sandbox helper differs from package policy; do not bypass the sandbox."

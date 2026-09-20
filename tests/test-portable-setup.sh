@@ -229,7 +229,7 @@ grep -q 'PI_CODING_AGENT_DIR="{{ bibi_pi_home }}"' "$ROOT/templates/bibi-pi-exte
 grep -q 'TREEHOUSE_DIR="{{ firstmate_instance_home }}/treehouse"' "$ROOT/templates/bibi-launcher.j2" || fail "launcher does not isolate Treehouse pool"
 grep -q "grep -q '\^pi: current '" "$ROOT/scripts/setup-common.sh" || fail "Herdr integration doctor gate missing"
 grep -q 'bibi-browser-smoke' "$ROOT/scripts/setup-macos.sh" || fail "macOS browser smoke missing"
-grep -q 'bibi-browser-smoke' "$ROOT/site.yml" || fail "Ubuntu browser smoke missing"
+grep -q 'browser_command_path.*preflight' "$ROOT/site.yml" || fail "Ubuntu browser smoke missing"
 grep -q -- "--extra-vars \"\$extra_vars\"" "$ROOT/templates/bibi-machine-update.j2" || fail "machine update drops selected profiles"
 
 # The committed example is sanitized and carries no real private inventory.

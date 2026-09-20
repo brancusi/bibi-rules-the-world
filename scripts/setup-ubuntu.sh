@@ -9,6 +9,9 @@ set -euo pipefail
 BIBI_MODE=${BIBI_MODE:?bibi dispatcher must set BIBI_MODE}
 [ "$BIBI_OS" = Linux ] || bibi_die "Ubuntu adapter received $BIBI_OS"
 case "$BIBI_ARCH" in x86_64|aarch64|arm64) ;; *) bibi_die "unsupported Ubuntu architecture $BIBI_ARCH" ;; esac
+if bibi_has_profile browser && [ "$BIBI_ARCH" != x86_64 ]; then
+  bibi_die "browser profile installs official Chrome on Ubuntu x86_64 only; ARM needs a separately reviewed native browser prerequisite"
+fi
 
 ubuntu_release() {
   local file=${BIBI_OS_RELEASE_FILE:-/etc/os-release} id version major minor
@@ -55,6 +58,9 @@ Fresh Pi home: $(bibi_yaml_scalar bibi_pi_home)
 Herdr Pi lifecycle integration: official bundled integration, installed only when absent into that exact Pi home.
 No projects, backlog, state, credentials, grants, trust decisions, or sessions are imported.
 EOF
+  if bibi_has_profile browser; then
+    printf '%s\n' 'Browser: checksum-pinned official Chrome Stable and pinned MCP; sandboxed daily-user AXI preflight. For browser-only reconciliation use browser.yml, not this full-machine apply.'
+  fi
   if bibi_has_profile private-capabilities; then
     printf '%s\n' 'Private capabilities remain pending. After logging in as the daily user, run gh auth login and bibi-private-capabilities-update with a private exact-ref manifest.'
   fi

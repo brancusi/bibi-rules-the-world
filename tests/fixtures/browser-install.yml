@@ -1,0 +1,14 @@
+---
+- name: Exercise official Chrome tasks with a synthetic package adapter
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  become: false
+  tasks:
+    - name: Run the production Chrome package installer
+      ansible.builtin.include_tasks:
+        file: "{{ browser_fixture_tasks }}"
+        apply:
+          environment:
+            PATH: "{{ browser_fixture_bin }}:/usr/bin:/bin"
+            BROWSER_FIXTURE_ROOT: "{{ chrome_executable | dirname }}"

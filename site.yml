@@ -19,10 +19,11 @@
           - ansible_architecture in no_mistakes_archives
           - ansible_architecture in doctl_archives
           - ansible_architecture in jdk_archives
+          - "'browser' not in bibi_profiles or ansible_architecture == 'x86_64'"
           - bibi_backend in ['herdr', 'tmux']
           - bibi_profiles | length > 0
           - bibi_profiles | difference(bibi_supported_profiles) | length == 0
-        fail_msg: "Supported architectures are x86_64/aarch64; backend and profiles must be reviewed portable values."
+        fail_msg: "Supported architectures are x86_64/aarch64 (browser requires x86_64); backend and profiles must be reviewed portable values."
 
   tasks:
     - name: Install base development and security packages
@@ -427,23 +428,20 @@
       environment: *bibi_environment
       changed_when: false
 
-    - name: Exercise the opt-in browser with a disposable local page
+    - name: Select only the reviewed browser tool pins
+      ansible.builtin.set_fact:
+        browser_axi_packages: "{{ (axi_packages | select('match', '^chrome-devtools-axi@') | list) + [browser_mcp_package] }}"
+      when: "'browser' in bibi_profiles"
+
+    - name: Install the opt-in official browser capability
+      ansible.builtin.include_tasks: tasks/install-browser.yml
+      when: "'browser' in bibi_profiles"
+
+    - name: Exercise the opt-in browser through AXI with a disposable local page
       become: true
       become_user: "{{ bibi_agent_user }}"
-      ansible.builtin.shell: |
-        set -euo pipefail
-        browser=$(command -v google-chrome-stable || command -v google-chrome || command -v chromium || command -v chromium-browser)
-        profile=$(mktemp -d /tmp/bibi-browser-smoke.XXXXXX)
-        trap 'rm -rf "$profile"' EXIT
-        timeout 30s "$browser" --headless --disable-gpu --disable-background-networking \
-          --disable-component-update --disable-sync --metrics-recording-only --no-first-run \
-          --no-default-browser-check --safebrowsing-disable-auto-update \
-          --user-data-dir="$profile/user-data" --dump-dom \
-          'data:text/html,<title>bibi-browser-smoke</title><p>bibi-browser-smoke</p>' \
-          >"$profile/output" 2>"$profile/errors"
-        grep -q bibi-browser-smoke "$profile/output"
-      args:
-        executable: /bin/bash
+      ansible.builtin.command:
+        argv: ["{{ browser_command_path }}", preflight]
       environment: *bibi_environment
       changed_when: false
       when: "'browser' in bibi_profiles"
