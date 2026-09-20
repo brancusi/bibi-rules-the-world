@@ -35,7 +35,7 @@ Repeat `--profile` to opt into capabilities:
 | `digitalocean` | Checksum-pinned doctl; authentication is separate |
 | `web-research` | Pinned Firecrawl CLI and pi-web-access |
 | `clojure` | Checksum-pinned Temurin 21 and Clojure CLI |
-| `browser` | Existing reviewed Chrome/Chromium plus a disposable local-page smoke; no floating browser install |
+| `browser` | Ubuntu x86_64: checksum-pinned official Chrome Stable, pinned MCP and sandboxed AXI preflight. macOS: existing reviewed native Chrome and its existing smoke. Linux ARM: manual prerequisite, not auto-installed |
 | `private-capabilities` | Caller-owned authenticated exact-ref manifest; never credentials or copied package contents |
 
 The setup creates separate code and operating roots:
@@ -122,6 +122,153 @@ Silicon account records all of these results:
 8. Wrong-checksum and interrupted-download tests leave the active command intact; staged upgrade and rollback both succeed.
 9. Logout/login starts only Herdr after Aqua login and does not claim Pi is alive. A FileVault reboot requires manual unlock/login and then reconciles.
 10. Browser smoke runs only when the browser profile is selected.
+
+## Shared Chrome for project testing (Ubuntu x86_64)
+
+Install once, then use a **new disposable profile and native AXI session for every
+run**. `group_vars/all.yml` owns Chrome's exact Debian version/SHA-256, official
+source, AXI pin and MCP pin/integrity. There is no Playwright-cache fallback.
+The default `ubuntu-compat` profile is unchanged; `browser` is explicitly opt-in.
+
+### Administrator installation / reconciliation
+
+On an already provisioned Ubuntu 24.04+ x86_64 host, as **bibi-admin**, review the
+PR and check out its exact approved commit in an administrator-owned clone.
+Then, from that clone (Ansible, Node and the daily account must already exist):
+
+```bash
+sudo ansible-playbook --inventory 'localhost,' browser.yml
+```
+
+This is the browser-only path, **not** `bibi-machine-update`, `site.yml`, or
+`bibi-setup --apply`. It installs the checksum-verified Google Stable `.deb`
+with apt and necessary package dependencies; preserves the package's standard
+sandbox installation; reconciles only Chrome AXI and its pinned MCP as `bibi`;
+installs `/usr/local/bin/bibi-browser`, its source under
+`/usr/local/lib/bibi/browser/`, and `/etc/bibi-browser.json`; and refreshes the
+existing `bibi-verify` dispatcher/Linux checker to recognize that receipt. It ends with the
+same unprivileged preflight that workers use. Google's package maintainer
+scripts install its signed-by update source/keyring, desktop entries/browser
+alternatives and (where needed) its standard AppArmor profile. Those are normal
+package effects, not a custom privilege helper. No browser runs as root.
+
+The helper includes the **existing** `bibi_memory_guard.py` admission source,
+not a second monitor: `admit --no-reserve` reads the existing host policy and
+`/proc` memory facts. This keeps browser-only reconciliation independent of an
+older installed guard daemon. It does not install/restart a memory timer,
+change swap, accounts, sudo, SSH, firewall, worker endpoints or unrelated tools.
+The separate browser receipt does not overwrite the full machine receipt.
+
+Google Chrome at `/opt/google/chrome/chrome` is covered by Ubuntu's standard
+`/etc/apparmor.d/chrome` user-namespace policy. See the official
+[Chromium sandbox explanation](https://chromium.googlesource.com/chromium/src/+/main/docs/security/apparmor-userns-restrictions.md),
+[Ubuntu policy rationale](https://ubuntu.com/blog/ubuntu-23-10-restricted-unprivileged-user-namespaces),
+and [Chrome Linux requirements](https://support.google.com/chrome/a/answer/9025903).
+Do **not** use `--no-sandbox`, copy a privileged sandbox helper, disable AppArmor,
+or globally relax user namespaces. If the installed package still reports
+`No usable sandbox`, stop and have the administrator diagnose the exact package
+and loaded OS policy; a nonstandard security exception requires separate review.
+Do not add sudo rights to the daily agent.
+
+Linux ARM is refused before installation: this manifest has no official native
+Google Chrome `.deb` for it. A separately reviewed distro-native sandbox-capable
+browser and ARM verification are prerequisites for a future adapter, not a
+claimed success here. The provisional macOS adapter remains unchanged: install
+native Google Chrome through its official installer first; its existing smoke
+is not evidence for this Ubuntu AXI helper.
+
+### Daily-user preflight and project use
+
+As the same ordinary `bibi` user that workers use:
+
+```bash
+bibi-browser preflight
+# Run a foreground, project-owned test script after the same preflight:
+cd /path/to/project
+bibi-browser --timeout 900 run -- bash ./scripts/browser-qa.sh
+```
+
+Inside that script use the native CLI normally; the wrapper supplies only this
+run's `CHROME_DEVTOOLS_AXI_SESSION`, loopback `BROWSER_URL`, explicit pinned
+`MCP_PATH` and bridge port. It launches `/opt/google/chrome/chrome` explicitly,
+with the standard sandbox, a fresh private `--user-data-dir`, and an ephemeral
+CDP port. It never attaches to a personal browser. For example:
+
+```bash
+chrome-devtools-axi open http://127.0.0.1:3000
+chrome-devtools-axi run <<'JS'
+console.log(await page.eval(() => document.title));
+JS
+chrome-devtools-axi screenshot "$BIBI_BROWSER_EVIDENCE/project.png"
+```
+
+Keep scripts in the foreground; do not background bridges, change the provided
+connection variables, launch extra browsers, or use `AUTO_CONNECT`. Preflight
+serves a disposable local synthetic HTML page, proves the exact navigation and
+JavaScript result, checks empty cookie/localStorage state, then saves a PNG via
+AXI. Both CDP and the bridge must have **owned loopback-only** listening sockets
+before use. No public debugging port, tunnel, firewall rule, or remote access is
+created. CDP is unauthenticated local control, so loopback is not a security
+boundary against other users on the same server; profiles isolate test state,
+not mutually hostile code running under one Unix account.
+
+One cooperative per-user file lock bounds wrapper-managed browser work to **one
+run across projects**. The existing memory admission policy can refuse that
+next run without inventorying or stopping any process. Other direct browser
+launches are outside this bound: migrate projects to this command rather than
+running around a busy slot. Let live tests/workers finish when admission refuses;
+low memory never authorizes a kill. Commands are time-bounded (preflight stages
+20s; project command default 900s, maximum 1800s), with bounded tool diagnostics.
+
+Cleanup is automatic on normal exit, failure, timeout, SIGINT or SIGTERM. It
+calls native `chrome-devtools-axi stop` only after checking this exclusively
+created session's PID, UID, start identity, cwd and connection environment, then
+terminates/reaps only its own Chrome child. AXI 0.1.31 can detach a bridge before
+registration and leave it behind on startup timeout. The helper therefore also
+retains Linux pidfds for at most 32 descendants witnessed through its **own live
+AXI-start child** (not a machine-wide process scan); only those same identities
+can be terminated if native cleanup leaves startup survivors. Unknown or changed
+ownership refuses cleanup and retains evidence. There is no PID-taking stop command, `pkill`, or
+fleet sweep. Do not call `stop` on a default/another task's session. SIGKILL or a
+host crash cannot run a `finally` block: retain the printed session evidence for
+operator investigation; do not assume a stale profile proves a browser orphan.
+
+Run evidence is private under `~/.bibi-browser/run-*`: logs, a non-secret session
+record and screenshot survive; the live profile and owned AXI session files are
+removed only after cleanup. Record the result, then remove **that exact printed
+run directory** when no longer needed (`rm -r -- /exact/printed/run-directory`).
+Do not glob-delete other projects' runs. Project commands' output is captured in
+that directory, not broadcast. Never copy cookies, personal profiles or provider
+credentials. Use each project's own restricted test accounts and synthetic data;
+there is no global shared login/password. Screenshots and logs may contain test
+data; share only reviewed, redacted evidence. MCP 1.9's native filesystem root is
+its OS temp directory: the wrapper sets `TMPDIR` to this private evidence
+directory, not unrestricted filesystem access. Put synthetic upload fixtures
+there and write screenshots there; outside file paths intentionally refuse.
+
+`bibi-verify` invokes this preflight when the browser profile or browser-only
+receipt is present. A successful package/unit/CI test is **not** a successful host
+smoke: require the unprivileged launch/navigation/JS/screenshot/cleanup receipt.
+Missing executable, sandbox refusal and AXI connection failure are distinct
+errors. Chrome AXI 0.1.31's `pages` formatter can turn an underlying MCP
+`list_pages` error into an empty list; never interpret `pages: 0` as readiness.
+The helper checks positive end-to-end results and retains underlying startup/tool
+errors. The formatter's missing `isError` handling is a separate upstream AXI
+issue; this repository does not patch globally installed code.
+
+### Browser security updates
+
+Google's versioned package URL can eventually disappear; fail closed rather
+than downloading a moving `current` artifact or an unofficial mirror. Review
+Chrome Stable security releases promptly, update version/hash together from the
+[official Debian index](https://dl.google.com/linux/chrome/deb/dists/stable/main/binary-amd64/Packages.gz),
+verify downloaded bytes, run `make lint`, then administrator-reconcile and repeat
+the daily-user smoke. Review MCP/AXI upgrades through the same pin owner. There
+is no new updater daemon or package hold: normal administrator/OS package updates
+may advance Chrome. Verification deliberately detects drift, and reconciliation
+refuses to downgrade a newer installed browser; promote the reviewed pin instead
+of undoing a security update. Exact top-level npm pins follow this repository's
+npm policy, not a vendored transitive-dependency lockfile.
 
 ## Authentication and private capabilities
 

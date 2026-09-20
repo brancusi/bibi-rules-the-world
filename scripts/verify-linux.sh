@@ -131,36 +131,12 @@ verify_cloudflare_skills() {
 }
 
 verify_browser_profile() {
-  local browser profile output
-  browser=$(command -v google-chrome-stable 2>/dev/null \
-    || command -v google-chrome 2>/dev/null \
-    || command -v chromium 2>/dev/null \
-    || command -v chromium-browser 2>/dev/null \
-    || true)
-  if [[ -z "$browser" ]]; then
-    echo "invalid  browser profile has no supported Chrome/Chromium command" >&2
-    failed=1
-    return
-  fi
-  profile=$(mktemp -d /tmp/bibi-browser-verify.XXXXXX) || {
-    echo "invalid  could not create disposable browser profile" >&2
-    failed=1
-    return
-  }
-  output="$profile/output"
-  if timeout 30s "$browser" --headless --disable-gpu --disable-background-networking \
-    --disable-component-update --disable-sync --metrics-recording-only --no-first-run \
-    --no-default-browser-check --safebrowsing-disable-auto-update \
-    --user-data-dir="$profile/user-data" --dump-dom \
-    'data:text/html,<title>bibi-browser-smoke</title><p>bibi-browser-smoke</p>' \
-    >"$output" 2>"$profile/errors" \
-    && grep -q bibi-browser-smoke "$output"; then
-    echo "ok       browser disposable local-page smoke"
-  else
-    echo "invalid  browser disposable local-page smoke failed" >&2
+  # Browser-only installation has its own receipt; do not overwrite the full
+  # machine receipt just to add Chrome. This also proves the workers' AXI path.
+  if ! /usr/local/bin/bibi-browser preflight; then
+    echo "invalid  browser AXI preflight failed; see its private evidence directory" >&2
     failed=1
   fi
-  rm -rf "$profile"
 }
 
 verify_shared_clojure_toolchain() {
@@ -505,7 +481,7 @@ if profile_selected_exact ubuntu-compat; then
   fi
 fi
 
-if profile_selected_exact browser; then
+if profile_selected_exact browser || [[ -f /etc/bibi-browser.json ]]; then
   printf '\nBrowser\n'
   verify_browser_profile
 fi

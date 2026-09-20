@@ -1,0 +1,27 @@
+---
+# Deliberately independent of site.yml: no accounts, SSH, firewall, worker
+# lifecycle, memory service, swap, or unrelated tools are reconciled here.
+- name: Reconcile only Bibi's shared browser capability
+  hosts: all
+  connection: local
+  become: true
+  gather_facts: true
+  vars_files:
+    - group_vars/all.yml
+  tasks:
+    - name: Select only the reviewed browser tool pins
+      ansible.builtin.set_fact:
+        browser_axi_packages: "{{ (axi_packages | select('match', '^chrome-devtools-axi@') | list) + [browser_mcp_package] }}"
+
+    - name: Install the browser capability
+      ansible.builtin.include_tasks: tasks/install-browser.yml
+
+    - name: Verify browser launch and AXI navigation as the daily user
+      become: true
+      become_user: "{{ bibi_agent_user }}"
+      ansible.builtin.command:
+        argv: ["{{ browser_command_path }}", preflight]
+      environment:
+        HOME: "{{ bibi_agent_home }}"
+        PATH: "{{ bibi_agent_home }}/.local/bin:/usr/local/bin:/usr/bin:/bin"
+      changed_when: false
