@@ -431,6 +431,102 @@ cat "$HOME/.local/state/bibi/provisioned-versions"
 cat /etc/bibi-provisioned-versions
 ```
 
+## User-local mise and Basecamp HEY CLI (Ubuntu)
+
+The Ubuntu Ansible setup installs checksum-pinned **mise 2026.9.15** for
+`bibi`. This is the official standalone mise executable, not a runtime or
+system package upgrade. It lives at
+`~/.local/share/bibi/mise/mise-2026.9.15`, linked from `~/.local/bin/mise`.
+Existing Ubuntu login/interactive PATH management already exposes that directory;
+no mise activation, shims, global config, hooks, or shell-file edits are added.
+The macOS portable adapter is unchanged.
+
+**HEY is not ready yet.** As checked on 2026-09-28, the pinned Basecamp
+HEY **1.7.0** archive passes its published SHA-256 check, but mise refuses
+installation because it cannot verify the registry-required GitHub artifact
+attestation. Both the public API and this host's existing authenticated access
+return 404 for the exact Linux amd64 archive digest; even mise's paranoid
+mode (direct API fallback instead of trusting the mirror's negative cache)
+fails closed. This is unavailable verification, not proof of tampering or proof
+that attestations do not exist. mise uses its native Sigstore verifier here:
+the host's old `gh 2.45.0` lacks `gh attestation`, but that is **not** the failed
+verification path. No `gh` upgrade or permission change is performed.
+
+Consequently `hey_cli_enabled: false` keeps the ordinary site build usable
+without claiming HEY was installed. `tasks/install-hey-cli.yml` is an opt-in,
+fail-closed installer, not a currently proven working upstream installation.
+Do not set that default to true until upstream provenance is verifiable and a
+real install/rerun is demonstrated. Never disable attestations, downgrade mise
+to evade its policy, or substitute an unsigned/unverified install to bypass it.
+A standalone checksum/Sigstore installer would omit mise's required GitHub
+build-provenance check; the presence of `checksums.txt.bundle` alone is not a
+verified signature.
+
+### Narrow installation and human sign-in
+
+As `bibi`, from this checkout, with Ansible already installed:
+
+```bash
+# Installs mise only. No sudo, services, runtimes or broad site reconciliation.
+ansible-playbook -i 'localhost,' hey-cli.yml --tags mise
+# Local checks in a new login shell:
+command -v mise
+MISE_NO_CONFIG=1 mise --version
+```
+
+After the provenance prerequisite is resolved, the full narrow playbook will
+attempt HEY through the [upstream-supported mise GitHub backend](https://github.com/basecamp/hey-cli/blob/main/docs/install.md):
+
+```bash
+ansible-playbook -i 'localhost,' hey-cli.yml
+# Only after that succeeds, in another ordinary bibi shell, the HUMAN runs:
+hey auth login
+```
+
+`mise install-into` selects only `github:basecamp/hey-cli` at the exact version,
+asset name and SHA-256 from `group_vars/all.yml`. It installs a prebuilt binary;
+Go (or any other runtime) is not needed. A clean environment, `MISE_NO_CONFIG=1`,
+`MISE_NO_HOOKS=1` and isolated cache/data/state directories prevent local project
+config from authorizing hooks or unrelated tool installs. On success, only the
+verified versioned binary is linked to `~/.local/bin/hey`. Existing unrelated
+`hey`/`mise` commands and redirected installation paths are refused. Provisioning
+uses the root `hey --version` flag, not the `hey version` subcommand (which can
+perform credential migration in this release), with an isolated environment.
+It never signs in, invokes the setup wizard, reads mail, or manages HEY sessions.
+
+No HEY authentication belongs in Git, Ansible variables/facts, logs or receipts.
+Reruns do not touch the user's HEY configuration, keyring or credentials; the
+installer owns only its dedicated tool directories and command links. An
+already-installed pin is checked locally without downloading or installing it
+again: a public `.bibi-verified.json` receipt must match the archive pin and
+installed binary hash. Unreceipted/interrupted or altered installs are refused,
+not adopted. Check mode performs static/path checks only: it does not download,
+verify provenance or demonstrate a real installation.
+
+### Updates, tests and narrow rollback
+
+Update `mise_version`, `hey_cli_version` and **both** architecture checksum maps
+in `group_vars/all.yml` in a reviewed PR. Verify mise checksums against its
+[GPG-signed release manifest](https://mise.jdx.dev/installing-mise.html#github-releases)
+(release-key fingerprint `24853EC9F655CE80B48E6C3A8B81C9D17413A06D`);
+review HEY's official release digests and retain mise's provenance enforcement.
+Do not run `mise self-update`, `mise upgrade`, or `hey upgrade` on these managed
+pins. Old versioned files remain available for a reviewed rollback.
+
+`make lint` includes `tests/test_hey_cli_install.py`: hermetic fake releases test
+both architectures, clean install, upgrade, no-download idempotency, checksum
+and provenance rejection, command/path conflicts, version mismatch, check
+mode and preservation of synthetic authentication. These fixtures cannot prove
+upstream attestation availability. Local version/real rerun evidence is separate
+from CI or check mode; `bibi-verify` does not yet report these optional tools.
+
+To undo only this setup, first confirm the symlinks still point into the two
+Bibi-managed roots, then remove `~/.local/bin/mise` and (if installed)
+`~/.local/bin/hey` and their dedicated `~/.local/share/bibi/mise` and
+`~/.local/share/bibi/hey-cli` directories. Do not remove an unrelated replacement
+command, `~/.config/hey`, credentials, global mise config, or other mise data.
+There are no shell activation lines to undo. Do not use `mise implode`.
+
 ## Update or reconcile the VM
 
 1. Change pins or tasks in this repository. For doctl, review both declared

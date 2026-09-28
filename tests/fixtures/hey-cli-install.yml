@@ -1,0 +1,13 @@
+---
+- name: Exercise user-local mise and HEY installation with synthetic releases
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  become: false
+  vars_files:
+    - ../../group_vars/all.yml
+  tasks:
+    - name: Exercise the production mise installer
+      ansible.builtin.import_tasks: ../../tasks/install-mise.yml
+    - name: Exercise the production HEY installer
+      ansible.builtin.import_tasks: ../../tasks/install-hey-cli.yml

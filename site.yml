@@ -342,6 +342,21 @@
           export PATH="$HOME/.local/bin:$PATH"
           export EDITOR="${EDITOR:-nano}"
 
+    - name: Install pinned user-local mise for the daily user
+      ansible.builtin.include_tasks:
+        file: tasks/install-mise.yml
+        apply:
+          become: true
+          become_user: "{{ bibi_agent_user }}"
+
+    - name: Install Basecamp HEY only when its provenance prerequisite is resolved
+      ansible.builtin.include_tasks:
+        file: tasks/install-hey-cli.yml
+        apply:
+          become: true
+          become_user: "{{ bibi_agent_user }}"
+      when: hey_cli_enabled | bool
+
     - name: Install pinned Pi without package lifecycle scripts
       become: true
       become_user: "{{ bibi_agent_user }}"

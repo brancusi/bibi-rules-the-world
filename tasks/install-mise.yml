@@ -1,0 +1,119 @@
+---
+# Run as the daily user, never root. This owns only the two declared local paths.
+- name: Validate the reviewed mise pin and platform
+  ansible.builtin.assert:
+    that:
+      - ansible_architecture in mise_archives
+      - mise_version is match('^[0-9]+\.[0-9]+\.[0-9]+$')
+      - mise_archives[ansible_architecture].sha256 is match('^[a-f0-9]{64}$')
+
+- name: Inspect mise installation directories without following links
+  ansible.builtin.stat:
+    path: "{{ item }}"
+    follow: false
+  loop:
+    - "{{ bibi_agent_home }}"
+    - "{{ bibi_agent_home }}/.local"
+    - "{{ bibi_agent_home }}/.local/bin"
+    - "{{ bibi_agent_home }}/.local/share"
+    - "{{ bibi_agent_home }}/.local/share/bibi"
+    - "{{ mise_install_root }}"
+  register: mise_directories
+
+- name: Refuse redirected mise installation directories
+  ansible.builtin.assert:
+    that:
+      - not item.stat.exists or (item.stat.isdir and not item.stat.islnk)
+    fail_msg: "mise installation directories must be direct directories."
+  loop: "{{ mise_directories.results }}"
+  loop_control:
+    label: "{{ item.item }}"
+
+- name: Locate mise on the ordinary system tool search path
+  ansible.builtin.command:
+    argv:
+      - /usr/bin/env
+      - -i
+      - "PATH={{ bibi_agent_home }}/.local/bin:/usr/local/bin:/usr/bin:/bin:/snap/bin"
+      - /bin/sh
+      - -c
+      - command -v mise || true
+  register: mise_existing_command
+  changed_when: false
+  check_mode: false
+
+- name: Refuse to shadow another mise installation
+  ansible.builtin.assert:
+    that:
+      - mise_existing_command.stdout in ['', mise_install_path]
+    fail_msg: "Another mise installation is on PATH; preserve it and resolve the conflict manually."
+
+- name: Inspect the mise command before reconciliation
+  ansible.builtin.stat:
+    path: "{{ mise_install_path }}"
+    follow: false
+  register: mise_command
+
+- name: Refuse to replace an unmanaged mise command
+  ansible.builtin.assert:
+    that:
+      - >-
+        not mise_command.stat.exists or
+        (mise_command.stat.islnk | default(false) and
+        mise_command.stat.lnk_source is match('^' ~ (mise_install_root | regex_escape) ~ '/mise-[0-9]+\.[0-9]+\.[0-9]+$'))
+    fail_msg: "Existing mise is not a Bibi-managed link; preserve it and resolve the conflict manually."
+
+- name: Create user-owned mise directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    mode: "0755"
+  loop:
+    - "{{ bibi_agent_home }}/.local/bin"
+    - "{{ mise_install_root }}"
+
+- name: Inspect the versioned mise target before download
+  ansible.builtin.stat:
+    path: "{{ mise_install_root }}/mise-{{ mise_version }}"
+    follow: false
+  register: mise_target
+
+- name: Refuse a redirected mise binary
+  ansible.builtin.assert:
+    that:
+      - not mise_target.stat.exists or (mise_target.stat.isreg and not mise_target.stat.islnk)
+
+- name: Download the checksum-pinned official mise executable
+  ansible.builtin.get_url:
+    url: "{{ mise_release_base_url }}/v{{ mise_version }}/mise-v{{ mise_version }}-linux-{{ mise_archives[ansible_architecture].arch }}"
+    dest: "{{ mise_install_root }}/mise-{{ mise_version }}"
+    checksum: "sha256:{{ mise_archives[ansible_architecture].sha256 }}"
+    mode: "0755"
+  when: not ansible_check_mode
+
+- name: Read the pinned mise version without loading configuration
+  ansible.builtin.command:
+    argv:
+      - /usr/bin/env
+      - -i
+      - "HOME={{ bibi_agent_home }}"
+      - PATH=/usr/bin:/bin
+      - MISE_NO_CONFIG=1
+      - "{{ mise_install_root }}/mise-{{ mise_version }}"
+      - --version
+  register: mise_installed_version
+  changed_when: false
+  when: not ansible_check_mode
+
+- name: Verify the pinned mise version
+  ansible.builtin.assert:
+    that:
+      - mise_installed_version.stdout.split()[0] == mise_version
+  when: not ansible_check_mode
+
+- name: Expose only the verified mise executable on the existing local PATH
+  ansible.builtin.file:
+    src: "{{ mise_install_root }}/mise-{{ mise_version }}"
+    dest: "{{ mise_install_path }}"
+    state: link
+  when: not ansible_check_mode

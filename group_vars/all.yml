@@ -141,6 +141,34 @@ doctl_archives:
     sha256: "a9857d2ef4498f6affb9baae2b37b890ccc4ddda9ec01e58b63a2e99e47eb363"
 doctl_darwin_arm64_sha256: "b139cd5ca9f2215842dd4adcdf2a088cda4a629cc475598fa55a4187878cb832"
 
+# User-local mise / Basecamp HEY CLI. Official release pins reviewed 2026-09-28.
+# mise checksums verified against the upstream GPG-signed SHASUMS256.asc
+# (24853EC9F655CE80B48E6C3A8B81C9D17413A06D). HEY checksums agree with the
+# release API and checksums.txt; mise must ALSO verify required attestations.
+# HEY 1.7.0 currently fails that check here: see README before enabling it.
+hey_cli_enabled: false
+mise_version: "2026.9.15"
+mise_release_base_url: "https://github.com/jdx/mise/releases/download"
+mise_install_root: "{{ bibi_agent_home }}/.local/share/bibi/mise"
+mise_install_path: "{{ bibi_agent_home }}/.local/bin/mise"
+mise_archives:
+  x86_64:
+    arch: "x64"
+    sha256: "09ea631d6f3e7031d63606a0892dc4c796f9fb57f493bc45937f9f7113c88216"
+  aarch64:
+    arch: "arm64"
+    sha256: "385e61f3e76a6781795eea541c45bba4cab32d137b84d961fa97f15cb4521156"
+hey_cli_version: "1.7.0"
+hey_cli_install_root: "{{ bibi_agent_home }}/.local/share/bibi/hey-cli"
+hey_cli_install_path: "{{ bibi_agent_home }}/.local/bin/hey"
+hey_cli_archives:
+  x86_64:
+    arch: "amd64"
+    sha256: "4543bb2a1122d3e7be05f889e27e0fc50631f397f8ec4c015d404aae9abe03b9"
+  aarch64:
+    arch: "arm64"
+    sha256: "e401158ecb4c9e4f0050a843988cc7abecabccb5aff030e7d25267b5fee69198"
+
 # This private collection is intentionally not fetched by cloud-init/Ansible.
 # After `gh auth login`, the daily user runs bibi-pi-extensions-update. The
 # merged collection at this commit requires Node.js 22+ and was exercised with Pi 0.85.1,
