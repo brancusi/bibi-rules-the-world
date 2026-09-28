@@ -1,0 +1,190 @@
+---
+# The GitHub backend MUST complete checksum and registry-required provenance
+# verification before extraction. Do not disable attestations to make this pass.
+- name: Validate the reviewed Basecamp HEY pin and platform
+  ansible.builtin.assert:
+    that:
+      - ansible_architecture in hey_cli_archives
+      - hey_cli_version is match('^[0-9]+\.[0-9]+\.[0-9]+$')
+      - hey_cli_archives[ansible_architecture].sha256 is match('^[a-f0-9]{64}$')
+
+- name: Select the isolated HEY installation directory
+  ansible.builtin.set_fact:
+    hey_cli_version_dir: "{{ hey_cli_install_root }}/{{ hey_cli_version }}-linux-{{ hey_cli_archives[ansible_architecture].arch }}"
+
+- name: Inspect HEY installation directories without following links
+  ansible.builtin.stat:
+    path: "{{ item }}"
+    follow: false
+  loop:
+    - "{{ hey_cli_install_root }}"
+    - "{{ hey_cli_version_dir }}"
+    - "{{ hey_cli_install_root }}/cache"
+    - "{{ hey_cli_install_root }}/data"
+    - "{{ hey_cli_install_root }}/state"
+  register: hey_cli_directories
+
+- name: Refuse redirected HEY installation directories
+  ansible.builtin.assert:
+    that:
+      - not item.stat.exists or (item.stat.isdir and not item.stat.islnk)
+  loop: "{{ hey_cli_directories.results }}"
+  loop_control:
+    label: "{{ item.item }}"
+
+- name: Locate hey on the ordinary system tool search path
+  ansible.builtin.command:
+    argv:
+      - /usr/bin/env
+      - -i
+      - "PATH={{ bibi_agent_home }}/.local/bin:/usr/local/bin:/usr/bin:/bin:/snap/bin"
+      - /bin/sh
+      - -c
+      - command -v hey || true
+  register: hey_cli_existing_command
+  changed_when: false
+  check_mode: false
+
+- name: Refuse to shadow another hey installation
+  ansible.builtin.assert:
+    that:
+      - hey_cli_existing_command.stdout in ['', hey_cli_install_path]
+    fail_msg: "Another hey installation is on PATH; preserve it and resolve the conflict manually."
+
+- name: Inspect the HEY command before reconciliation
+  ansible.builtin.stat:
+    path: "{{ hey_cli_install_path }}"
+    follow: false
+  register: hey_cli_command
+
+- name: Refuse to replace another tool named hey
+  ansible.builtin.assert:
+    that:
+      - >-
+        not hey_cli_command.stat.exists or
+        (hey_cli_command.stat.islnk | default(false) and
+        hey_cli_command.stat.lnk_source is match('^' ~ (hey_cli_install_root | regex_escape) ~ '/[0-9]+\.[0-9]+\.[0-9]+-linux-(amd64|arm64)/hey$'))
+    fail_msg: "Existing hey is not a Bibi-managed Basecamp HEY link; preserve it and resolve the conflict manually."
+
+- name: Create the isolated user-owned HEY installation root
+  ansible.builtin.file:
+    path: "{{ hey_cli_install_root }}"
+    state: directory
+    mode: "0755"
+
+- name: Inspect the versioned HEY executable
+  ansible.builtin.stat:
+    path: "{{ hey_cli_version_dir }}/hey"
+    follow: false
+    checksum_algorithm: sha256
+  register: hey_cli_target
+
+- name: Refuse a redirected HEY binary
+  ansible.builtin.assert:
+    that:
+      - not hey_cli_target.stat.exists or (hey_cli_target.stat.isreg and not hey_cli_target.stat.islnk)
+
+- name: Inspect the non-secret HEY verification receipt
+  ansible.builtin.stat:
+    path: "{{ hey_cli_version_dir }}/.bibi-verified.json"
+    follow: false
+  register: hey_cli_receipt
+
+- name: Refuse to adopt a HEY binary without a regular verification receipt
+  ansible.builtin.assert:
+    that:
+      - not hey_cli_receipt.stat.exists or (hey_cli_receipt.stat.isreg and not hey_cli_receipt.stat.islnk)
+      - not hey_cli_target.stat.exists or hey_cli_receipt.stat.exists
+    fail_msg: "Unverified or interrupted HEY installation; inspect and remove only that version directory before retrying."
+
+- name: Read only the public installation verification receipt
+  ansible.builtin.slurp:
+    src: "{{ hey_cli_version_dir }}/.bibi-verified.json"
+  register: hey_cli_verified
+  when: hey_cli_target.stat.exists
+
+- name: Verify cached HEY binary integrity before skipping installation
+  ansible.builtin.assert:
+    that:
+      - (hey_cli_verified.content | b64decode | from_json).archive_sha256 == hey_cli_archives[ansible_architecture].sha256
+      - (hey_cli_verified.content | b64decode | from_json).binary_sha256 == hey_cli_target.stat.checksum
+      - (hey_cli_verified.content | b64decode | from_json).version == hey_cli_version
+  when: hey_cli_target.stat.exists
+
+- name: Install only the pinned HEY release with required provenance verification
+  ansible.builtin.command:
+    argv:
+      - /usr/bin/env
+      - -i
+      - "HOME={{ bibi_agent_home }}"
+      - PATH=/usr/bin:/bin
+      - MISE_NO_CONFIG=1
+      - MISE_NO_HOOKS=1
+      - MISE_PARANOID=1
+      - "MISE_DATA_DIR={{ hey_cli_install_root }}/data"
+      - "MISE_CACHE_DIR={{ hey_cli_install_root }}/cache"
+      - "MISE_STATE_DIR={{ hey_cli_install_root }}/state"
+      - "{{ mise_install_root }}/mise-{{ mise_version }}"
+      - install-into
+      - >-
+        {{ 'github:basecamp/hey-cli[asset_pattern=hey_' ~ hey_cli_version ~ '_linux_' ~
+           hey_cli_archives[ansible_architecture].arch ~ '.tar.gz,checksum=sha256:' ~
+           hey_cli_archives[ansible_architecture].sha256 ~ ']@' ~ hey_cli_version }}
+      - "{{ hey_cli_version_dir }}"
+    chdir: "{{ hey_cli_install_root }}"
+    creates: "{{ hey_cli_version_dir }}/hey"
+  # In check mode directories/binaries might not exist yet; no install is evidence.
+  when: not ansible_check_mode
+
+- name: Hash the verified installed HEY binary
+  ansible.builtin.stat:
+    path: "{{ hey_cli_version_dir }}/hey"
+    checksum_algorithm: sha256
+    follow: false
+  register: hey_cli_verified_binary
+  when: not ansible_check_mode
+
+- name: Require a regular executable from the verified HEY archive
+  ansible.builtin.assert:
+    that:
+      - hey_cli_verified_binary.stat.isreg
+      - not hey_cli_verified_binary.stat.islnk
+      - hey_cli_verified_binary.stat.executable
+  when: not ansible_check_mode
+
+- name: Read the installed HEY release version without authentication
+  ansible.builtin.command:
+    argv:
+      - /usr/bin/env
+      - -i
+      - "HOME={{ hey_cli_install_root }}"
+      - PATH=/usr/bin:/bin
+      - "{{ hey_cli_version_dir }}/hey"
+      - --version
+    chdir: "{{ hey_cli_install_root }}"
+  register: hey_cli_installed_version
+  changed_when: false
+  when: not ansible_check_mode
+
+- name: Verify the installed HEY release version
+  ansible.builtin.assert:
+    that:
+      - hey_cli_installed_version.stdout == 'hey version ' ~ hey_cli_version
+  when: not ansible_check_mode
+
+- name: Record only public HEY artifact integrity after successful verification
+  ansible.builtin.copy:
+    dest: "{{ hey_cli_version_dir }}/.bibi-verified.json"
+    mode: "0644"
+    content: >-
+      {{ {'version': hey_cli_version,
+          'archive_sha256': hey_cli_archives[ansible_architecture].sha256,
+          'binary_sha256': hey_cli_verified_binary.stat.checksum} | to_nice_json }}
+  when: not ansible_check_mode
+
+- name: Expose verified HEY on the existing local PATH
+  ansible.builtin.file:
+    src: "{{ hey_cli_version_dir }}/hey"
+    dest: "{{ hey_cli_install_path }}"
+    state: link
+  when: not ansible_check_mode

@@ -1,0 +1,26 @@
+---
+# Narrow, unprivileged installer. --tags mise installs ONLY mise.
+# A full run attempts HEY and fails closed if required provenance is unavailable.
+- name: Install user-local mise and Basecamp HEY without provisioning the host
+  hosts: all
+  connection: local
+  become: false
+  gather_facts: true
+  vars_files:
+    - group_vars/all.yml
+  pre_tasks:
+    - name: Require the daily user and supported Linux platform
+      ansible.builtin.assert:
+        that:
+          - ansible_user_id == bibi_agent_user
+          - ansible_system == 'Linux'
+          - ansible_architecture in mise_archives
+      tags: always
+  tasks:
+    - name: Reconcile pinned user-local mise
+      ansible.builtin.import_tasks: tasks/install-mise.yml
+      tags: mise
+
+    - name: Attempt verified Basecamp HEY installation
+      ansible.builtin.import_tasks: tasks/install-hey-cli.yml
+      tags: hey-cli

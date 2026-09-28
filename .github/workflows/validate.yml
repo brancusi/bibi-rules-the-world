@@ -30,7 +30,7 @@ jobs:
       - name: Check shell syntax and lint shell scripts and templates
         run: make shell
 
-      - name: Compile and unit-test the memory guard
+      - name: Compile and run Python unit and provisioning tests
         run: make python
 
       - name: Exercise provisioning and verification fixtures
