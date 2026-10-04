@@ -494,6 +494,51 @@ if PATH="$axi_bin:$PATH" BIBI_TEST_NPM_ROOT="$axi_root" BIBI_TEST_NPM_LOG="$axi_
   fail "AXI installation accepted a moving npm tag"
 fi
 
+# Exercise the actual Netlify task with the same hermetic npm stub. Extract
+# only this task: never execute the host provisioning play against the host.
+python3 - "$root_dir/site.yml" "$axi_dir/netlify.yml" "$axi_bin" <<'PY'
+import sys
+import yaml
+
+site, output, npm_bin = sys.argv[1:]
+play = yaml.safe_load(open(site))[0]
+task = next(t for t in play['tasks'] if t.get('register') == 'netlify_cli_install')
+assert task['become'] is True
+assert task['become_user'] == '{{ bibi_agent_user }}'
+assert task['environment']['PATH'].startswith('{{ bibi_agent_home }}/.local/bin:')
+task['become'] = False
+task['environment'] = {'PATH': npm_bin + ':/usr/bin:/bin'}
+with open(output, 'w') as stream:
+    yaml.safe_dump([{'name': 'Test Netlify reconciliation', 'hosts': 'localhost',
+                     'gather_facts': False, 'tasks': [task]}], stream)
+PY
+run_netlify_installer() {
+  BIBI_TEST_NPM_ROOT="$axi_root" BIBI_TEST_NPM_LOG="$axi_dir/npm-calls.log" \
+    ansible-playbook --inventory 'localhost,' --connection local "$axi_dir/netlify.yml" \
+      --extra-vars "@$root_dir/group_vars/all.yml" \
+      --extra-vars "bibi_agent_user=$(id -un)" >"$1" 2>&1
+}
+netlify_pin=$(python3 -c 'import sys,yaml;print(yaml.safe_load(open(sys.argv[1]))["netlify_cli_package"])' \
+  "$root_dir/group_vars/all.yml")
+[[ $netlify_pin == netlify-cli@27.10.2 ]] || fail "unexpected Netlify pin: $netlify_pin"
+for previous in absent 27.10.1 27.10.3; do
+  if [[ $previous != absent ]]; then
+    printf '{"name":"netlify-cli","version":"%s"}\n' "$previous" >"$axi_root/netlify-cli/package.json"
+  fi
+  must_succeed "$axi_dir/netlify-$previous.log" "Netlify reconciliation failed ($previous)" \
+    run_netlify_installer "$axi_dir/netlify-$previous.log"
+  [[ $(jq -r .version "$axi_root/netlify-cli/package.json") == 27.10.2 ]] \
+    || fail "Netlify did not converge to the reviewed pin"
+  grep -Eq 'changed=1([[:space:]]|$)' "$axi_dir/netlify-$previous.log" \
+    || fail "Netlify reconciliation did not report a change"
+done
+must_succeed "$axi_dir/netlify-idempotent.log" "Netlify second reconciliation failed" \
+  run_netlify_installer "$axi_dir/netlify-idempotent.log"
+grep -Eq 'changed=0([[:space:]]|$)' "$axi_dir/netlify-idempotent.log" \
+  || fail "Netlify reconciliation was not idempotent"
+grep -Fq -- '--ignore-scripts netlify-cli@27.10.2' "$axi_dir/npm-calls.log" \
+  || fail "Netlify install did not disable lifecycle scripts"
+
 # Exercise bibi-verify's exact version and metadata checks with local fixtures.
 verify_dir="$tmp_dir/verify"
 mkdir -p "$verify_dir"
@@ -552,6 +597,7 @@ global_specs=(
   '@earendil-works/pi-coding-agent@0.83.0'
   'wrangler@4.125.0'
   'firecrawl-cli@1.19.27'
+  'netlify-cli@27.10.2'
   'gh-axi@0.1.30'
   'chrome-devtools-axi@0.1.31'
   'lavish-axi@0.1.50'
@@ -583,6 +629,7 @@ cat >>"$verify_dir/versions" <<EOF
 pi_package=@earendil-works/pi-coding-agent@0.83.0
 wrangler_package=wrangler@4.125.0
 firecrawl_cli_package=firecrawl-cli@1.19.27
+netlify_cli_package=netlify-cli@27.10.2
 axi_packages=gh-axi@0.1.30 chrome-devtools-axi@0.1.31 lavish-axi@0.1.50 tasks-axi@0.2.5 quota-axi@0.1.29
 pi_public_packages=npm:@tmustier/pi-files-widget@0.2.0 npm:pi-web-access@0.24.0
 cloudflare_skills_repo=https://github.com/cloudflare/skills.git
@@ -603,6 +650,21 @@ if env "${tooling_verify_env[@]}" "$root_dir/scripts/verify.sh" >"$verify_dir/to
   fail "bibi-verify accepted a Wrangler version mismatch"
 fi
 printf '{"name":"wrangler","version":"4.125.0"}\n' >"$global_npm_root/wrangler/package.json"
+
+for bad_netlify_version in 27.10.1 27.10.3; do
+  make_package_metadata "$global_npm_root" "netlify-cli@$bad_netlify_version"
+  if env "${tooling_verify_env[@]}" "$root_dir/scripts/verify.sh" \
+    >"$verify_dir/tooling-netlify-$bad_netlify_version.log" 2>&1; then
+    fail "bibi-verify accepted netlify-cli $bad_netlify_version"
+  fi
+done
+rm "$global_npm_root/netlify-cli/package.json"
+if env "${tooling_verify_env[@]}" "$root_dir/scripts/verify.sh" >"$verify_dir/tooling-netlify-missing.log" 2>&1; then
+  fail "bibi-verify accepted missing Netlify metadata"
+fi
+make_package_metadata "$global_npm_root" 'netlify-cli@27.10.2'
+env "${tooling_verify_env[@]}" "$root_dir/scripts/verify.sh" >"$verify_dir/tooling-netlify-good.log" \
+  || fail "bibi-verify rejected the reviewed Netlify pin"
 
 # The reviewed browser CLI pin is exact: an older, a newer, and a metadata-less
 # global installation are all rejected, and only 0.1.31 passes.

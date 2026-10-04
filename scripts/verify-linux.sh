@@ -423,6 +423,7 @@ fi
 verify_global_npm_spec "$(read_pin pi_package)"
 profile_enabled cloudflare && verify_global_npm_spec "$(read_pin wrangler_package)"
 profile_enabled web-research && verify_global_npm_spec "$(read_pin firecrawl_cli_package)"
+profile_enabled ubuntu-compat && verify_global_npm_spec "$(read_pin netlify_cli_package)"
 read -r -a axi_package_specs <<< "$(read_pin axi_packages)"
 for axi_package_spec in "${axi_package_specs[@]}"; do
   verify_global_npm_spec "$axi_package_spec"
@@ -438,6 +439,7 @@ required_commands=(node npm git gh jq pi treehouse no-mistakes gh-axi chrome-dev
 [[ $(read_pin backend) == herdr ]] && required_commands+=(herdr)
 profile_enabled cloudflare && required_commands+=(wrangler)
 profile_enabled web-research && required_commands+=(firecrawl)
+profile_enabled ubuntu-compat && required_commands+=(netlify)
 profile_enabled digitalocean && required_commands+=(doctl)
 profile_enabled clojure && required_commands+=(java javac jar clojure clj)
 for command_name in "${required_commands[@]}"; do

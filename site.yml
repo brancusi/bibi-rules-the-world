@@ -425,6 +425,19 @@
         or 'removed' in firecrawl_cli_install.stdout
       when: "'ubuntu-compat' in bibi_profiles or 'web-research' in bibi_profiles"
 
+    - name: Install pinned Netlify CLI without package lifecycle scripts
+      become: true
+      become_user: "{{ bibi_agent_user }}"
+      ansible.builtin.command:
+        cmd: "npm install --global --ignore-scripts {{ netlify_cli_package }}"
+      environment: *bibi_environment
+      register: netlify_cli_install
+      changed_when: >-
+        'added' in netlify_cli_install.stdout
+        or 'changed' in netlify_cli_install.stdout
+        or 'removed' in netlify_cli_install.stdout
+      when: "'ubuntu-compat' in bibi_profiles"
+
     - name: Install the reviewed official Cloudflare skills
       ansible.builtin.include_tasks: tasks/install-cloudflare-skills.yml
       vars:

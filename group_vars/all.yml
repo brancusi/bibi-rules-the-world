@@ -77,6 +77,9 @@ wrangler_package: "wrangler@4.125.0"
 wrangler_integrity: "sha512-yFpvggu+xk1Hdm/Uxwaqa19bb7GArME4CrCS3Vov68a2TZq2MPO+wLocKbbnIC9K0oLowcdau7/ycxbbNHKCEg=="
 firecrawl_cli_package: "firecrawl-cli@1.19.27"
 firecrawl_cli_integrity: "sha512-ZbQrtRzaN3PIQmpYJSh10sabZmXXVWcZk0aNc5i2hzVs1vH0lFHaLzkmMTNE+ZjiuZ4w9rpM7377xF2DpVI9zQ=="
+# Netlify CLI 27.10.2 requires Node >=22.13.0; lifecycle scripts stay disabled.
+netlify_cli_package: "netlify-cli@27.10.2"
+netlify_cli_integrity: "sha512-2qQRJf3OufakXPIgKn/U1cqqWydwA6X7OBAVxRldM/D6H7uAmk7awXsJ5EypV4w1ElCdW9GtDFVkeY3N7I5M9w=="
 axi_packages:
   - "gh-axi@0.1.30"
   - "chrome-devtools-axi@0.1.31"
