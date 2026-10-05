@@ -230,7 +230,7 @@ grep -q 'TREEHOUSE_DIR="{{ firstmate_instance_home }}/treehouse"' "$ROOT/templat
 grep -q "grep -q '\^pi: current '" "$ROOT/scripts/setup-common.sh" || fail "Herdr integration doctor gate missing"
 grep -q 'bibi-browser-smoke' "$ROOT/scripts/setup-macos.sh" || fail "macOS browser smoke missing"
 grep -q 'bibi-browser-smoke' "$ROOT/site.yml" || fail "Ubuntu browser smoke missing"
-grep -q -- "--extra-vars \"\$extra_vars\"" "$ROOT/templates/bibi-machine-update.j2" || fail "machine update drops selected profiles"
+grep -q -- "--extra-vars \"\$extra_vars\"" "$ROOT/templates/bibi-machine-update-command.j2" || fail "machine update drops selected profiles"
 
 # The committed example is sanitized and carries no real private inventory.
 if grep -Eq 'brancusi|github_pat|ghp_|token=' "$ROOT/examples/private-capabilities.manifest.example"; then

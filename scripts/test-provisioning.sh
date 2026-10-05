@@ -10,6 +10,23 @@ fail() {
   exit 1
 }
 
+# Firstmate's backlog update/mv contract requires >=0.2.6; retain an exact
+# provisioning pin, and keep the portable installer on that reviewed release.
+python3 - "$root_dir" <<'PY'
+import pathlib
+import re
+import sys
+import yaml
+
+root = pathlib.Path(sys.argv[1])
+pins = yaml.safe_load((root / 'group_vars/all.yml').read_text())
+specs = [s for s in pins['axi_packages'] if s.startswith('tasks-axi@')]
+assert len(specs) == 1, 'expected one tasks-axi pin'
+match = re.fullmatch(r'tasks-axi@(\d+)\.(\d+)\.(\d+)', specs[0])
+assert match and tuple(map(int, match.groups())) >= (0, 2, 6), 'Firstmate requires tasks-axi >=0.2.6'
+assert f'bibi_install_npm_cli {specs[0]} ' in (root / 'scripts/setup-macos.sh').read_text()
+PY
+
 # Every helper below writes its playbook output to a log instead of the console,
 # so a failure that is not expected would otherwise abort this script with no
 # diagnostic at all. Wrap any run that must succeed in this.
@@ -601,7 +618,7 @@ global_specs=(
   'gh-axi@0.1.30'
   'chrome-devtools-axi@0.1.31'
   'lavish-axi@0.1.50'
-  'tasks-axi@0.2.5'
+  'tasks-axi@0.2.6'
   'quota-axi@0.1.29'
 )
 for spec in "${global_specs[@]}"; do
@@ -630,7 +647,7 @@ pi_package=@earendil-works/pi-coding-agent@0.83.0
 wrangler_package=wrangler@4.125.0
 firecrawl_cli_package=firecrawl-cli@1.19.27
 netlify_cli_package=netlify-cli@27.10.2
-axi_packages=gh-axi@0.1.30 chrome-devtools-axi@0.1.31 lavish-axi@0.1.50 tasks-axi@0.2.5 quota-axi@0.1.29
+axi_packages=gh-axi@0.1.30 chrome-devtools-axi@0.1.31 lavish-axi@0.1.50 tasks-axi@0.2.6 quota-axi@0.1.29
 pi_public_packages=npm:@tmustier/pi-files-widget@0.2.0 npm:pi-web-access@0.24.0
 cloudflare_skills_repo=https://github.com/cloudflare/skills.git
 cloudflare_skills_ref=$verify_skills_ref
@@ -650,6 +667,23 @@ if env "${tooling_verify_env[@]}" "$root_dir/scripts/verify.sh" >"$verify_dir/to
   fail "bibi-verify accepted a Wrangler version mismatch"
 fi
 printf '{"name":"wrangler","version":"4.125.0"}\n' >"$global_npm_root/wrangler/package.json"
+
+# Reject the incompatible prior release, an unreviewed newer release, and
+# missing metadata; only the exact compatible receipt pin passes.
+for bad_tasks_version in 0.2.5 0.2.7; do
+  make_package_metadata "$global_npm_root" "tasks-axi@$bad_tasks_version"
+  if env "${tooling_verify_env[@]}" "$root_dir/scripts/verify.sh" \
+    >"$verify_dir/tooling-tasks-$bad_tasks_version.log" 2>&1; then
+    fail "bibi-verify accepted tasks-axi $bad_tasks_version"
+  fi
+done
+rm "$global_npm_root/tasks-axi/package.json"
+if env "${tooling_verify_env[@]}" "$root_dir/scripts/verify.sh" >"$verify_dir/tooling-tasks-missing.log" 2>&1; then
+  fail "bibi-verify accepted missing tasks-axi metadata"
+fi
+make_package_metadata "$global_npm_root" 'tasks-axi@0.2.6'
+env "${tooling_verify_env[@]}" "$root_dir/scripts/verify.sh" >"$verify_dir/tooling-tasks-good.log" \
+  || fail "bibi-verify rejected the compatible tasks-axi pin"
 
 for bad_netlify_version in 27.10.1 27.10.3; do
   make_package_metadata "$global_npm_root" "netlify-cli@$bad_netlify_version"

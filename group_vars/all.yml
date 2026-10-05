@@ -84,12 +84,13 @@ axi_packages:
   - "gh-axi@0.1.30"
   - "chrome-devtools-axi@0.1.31"
   - "lavish-axi@0.1.50"
-  - "tasks-axi@0.2.5"
+  # Firstmate backlog update/mv support requires tasks-axi >=0.2.6.
+  - "tasks-axi@0.2.6"
   - "quota-axi@0.1.29"
 gh_axi_integrity: "sha512-4qw7+INJqdH5obm6NOUQnqBRALMG/BYQwTseVr9I7DHvccEytBtltc0EvB0SxrDzIUTKPshI9uKtfp83TjlBjA=="
 chrome_devtools_axi_integrity: "sha512-vAl0cOYpjC5yG70ZUKl8AQkOAMiB/73NjWeDxzbQt20uRCXwQIGSPFR05Kuued7ClC2+DRgCMacCBxF48MCxyw=="
 lavish_axi_integrity: "sha512-w57Pdna5MmsgHTewyhOPkuzwbCe98WqR6yrvf/r+fxs1qor2ypHzeHD10H6V5n4qJMKosBClcK9M0QzmrbaoHA=="
-tasks_axi_integrity: "sha512-FxssEW7+MuUNHWJ7uhdGrRsBDev/Zw5NutUBHcf8r/npG6z9+NfUUIeXdcdDHrC9ixEKOqQ9Uomay2TLpDB6Eg=="
+tasks_axi_integrity: "sha512-LDXSSYB+yVwloxq1XGtZKeWamOf/oD9XFqnohJYlFrqalg5XEne1SpGcNZMQqNzQthsY+iyMvCUeGxOzrL5/9Q=="
 quota_axi_integrity: "sha512-RTuWSwKy8SseMxg1enIaNu6PPV2YTjEZVvYTRLkB2rIa5PJs8cgr/6rCWZsbr7cEePEp9VFImb75UXS3+T3f/g=="
 
 # Public Pi packages are reconciled through Pi's official package installer as

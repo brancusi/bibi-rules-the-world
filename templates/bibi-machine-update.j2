@@ -1,25 +1,5 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-if [[ ${EUID} -ne 0 ]]; then
-  echo "Run this through sudo from the {{ bibi_admin_user }} account." >&2
-  exit 1
-fi
-
-receipt=/etc/bibi-provisioned-versions
-[[ -f "$receipt" && ! -L "$receipt" ]] || { echo "Missing direct machine receipt: $receipt" >&2; exit 1; }
-profiles=$(awk -F= '$1 == "profiles" { print substr($0, index($0, "=") + 1); found=1; exit } END { if (!found) exit 1 }' "$receipt")
-backend=$(awk -F= '$1 == "backend" { print substr($0, index($0, "=") + 1); found=1; exit } END { if (!found) exit 1 }' "$receipt")
-[[ "$profiles" =~ ^[a-z0-9-]+(,[a-z0-9-]+)*$ ]] || { echo "Invalid profiles in $receipt" >&2; exit 1; }
-[[ "$backend" == herdr || "$backend" == tmux ]] || { echo "Invalid backend in $receipt" >&2; exit 1; }
-extra_vars=$(jq -cn --arg profiles "$profiles" --arg backend "$backend" \
-  '{bibi_profiles: ($profiles | split(",")), bibi_backend: $backend}')
-
-exec ansible-pull \
-  --url "{{ bibi_config_repo_url }}" \
-  --checkout "{{ bibi_config_repo_ref }}" \
-  --inventory "localhost," \
-  --connection local \
-  --extra-vars "$extra_vars" \
-  site.yml
-
+# Record even receipt-validation failures before the actual update starts.
+exec /usr/local/sbin/bibi-record-update -- /usr/local/sbin/bibi-machine-update-command

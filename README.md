@@ -595,8 +595,7 @@ sudo ansible-playbook -i 'localhost,' shared-clojure-toolchain.yml
    profiles and backend forward instead of silently expanding a narrow install:
 
 ```bash
-ssh bibi-admin
-sudo /usr/local/sbin/bibi-machine-update
+ssh -t bibi-admin 'sudo /usr/local/sbin/bibi-machine-update'
 ```
 
 For `ubuntu-compat`, the machine update reconciles Wrangler, public Pi packages,
@@ -619,6 +618,74 @@ Firstmate also has its own guarded `/updatefirstmate` workflow. If it advances a
 clean checkout, Ansible accepts that descendant and does not silently reset it
 to the older manifest floor. Review and bump `firstmate_ref` here so clean
 rebuilds eventually converge on the promoted commit.
+
+### Machine-update run records
+
+Once the recording wrapper is installed, every administrator machine update
+writes its start record **before** invoking the update implementation, while
+continuing to show output in the terminal. The updater's exit status is retained;
+a successful recorder is not evidence that Ansible succeeded. Validation failures
+before Ansible starts are recorded too. Merging this code alone does **not**
+upgrade an older installed wrapper; use the first-rerun bootstrap below.
+
+- `/var/log/bibi-machine-update/<run-id>.log`: complete combined stdout/stderr,
+  root:root directory `0700`, files `0600`; administrators inspect with sudo.
+  These logs can contain sensitive task output. Never publish or copy them into
+  an agent-readable location.
+- `/var/lib/bibi-machine-update/<run-id>.json`: root:root directory `0755`, atomic
+  snapshots `0644`, readable by `bibi` without sudo. Only generated run IDs,
+  timestamps, completion/exit/signal/logging metadata and validated numeric
+  localhost recap counters are shared. No command arguments, raw errors, host
+  labels, environment values or task output are copied here.
+- Records are persistent and unique per run; there is no automatic deletion or
+  retry. Existing unsafe ownership, writable directories or symlinks are refused
+  rather than repaired. Neither privilege grants nor credentials are changed.
+
+As `bibi`, locate the most recently modified summary and read it:
+
+```bash
+latest=$(find /var/lib/bibi-machine-update -maxdepth 1 -type f -name '*.json' -printf '%T@ %p\n' | sort -nr | head -n 1 | cut -d' ' -f2-)
+[ -n "$latest" ] && jq . "$latest"
+```
+
+Interpret `state=completed` with `updater_exit=0` as the command returning zero,
+not a full operational/security verification. Nonzero `updater_exit` is failure.
+`recap=null` means no supported recap was captured, even if the command returned
+zero: parsing accepts only the default uncoloured localhost recap with seven
+bounded numeric counters. Task output is untrusted; even a parsed recap cannot
+prove success independently of exit status and subsequent verification.
+`launch_failed` means no updater process started. `interrupted` records observed
+INT/TERM/HUP and forwards it to the updater's process group. The wrapper preserves
+a nonzero updater result; when the child returns zero after interruption it still
+returns `128+signal`. Recording failure makes an otherwise successful wrapper
+return 74. Inspect `log_complete` as well as the exit status.
+
+SIGKILL, power loss, or final-summary write failure can leave `state=started`,
+`finished_at=null`, `updater_exit=null`: **incomplete, not success**. A started
+record alone cannot distinguish a running process from an abruptly terminated
+run. A failure before the initial durable snapshot prevents the updater from
+launching. Full logs remain private and available for administrator inspection;
+no promise is made that every termination can produce a final recap.
+
+For the first rerun with the **older unrecorded wrapper**, after this change has
+landed, use this single SSH command from a Bash-compatible local shell. It fetches
+the reviewed recorder at an immutable commit into a private root-owned temporary
+directory, verifies SHA-256, then records the already-installed old updater:
+
+```bash
+ssh -t bibi-admin 'sudo bash -c '\''set -euo pipefail; umask 077; d=$(mktemp -d /root/bibi-update-bootstrap.XXXXXX); curl --fail --silent --show-error --proto "=https" --tlsv1.2 https://raw.githubusercontent.com/brancusi/bibi-rules-the-world/cc8ffd368149ab96cb3e7a08cb200dcf3440e90b/scripts/bibi_record_update.py -o "$d/recorder.py"; printf "%s  %s\n" 0728dc66e7e047a8c2da71a0961b5f4d93901cd9f6bb178e78ccc995b374d1af "$d/recorder.py" | sha256sum --check --status; exec /usr/bin/python3 "$d/recorder.py" -- /usr/local/sbin/bibi-machine-update'\'''
+```
+
+Fetch/checksum failure prevents the updater from starting. The temporary recorder
+is retained privately under `/root`; run logs and safe summaries use the normal
+paths above. This captures the first rerun without pretending the new wrapper is
+installed. Do not pipe a remote script to a shell, substitute a moving branch for
+the recorder download, or bypass provisioning prerequisites. The pinned recorder
+is independent of `ansible-pull`, which still reconciles the configured branch.
+After that full update installs the wrapper successfully, use the normal single
+SSH command above (not the bootstrap, which would create nested records).
+The bootstrap itself is a full machine update, not a Netlify-only operation;
+only the maintenance administrator should run it after the reviewed change lands.
 
 ## Memory safety net
 
