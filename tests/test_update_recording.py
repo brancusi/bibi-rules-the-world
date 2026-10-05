@@ -1,8 +1,10 @@
 """Hermetic recorder tests: no root, live updater, or host destinations."""
+import hashlib
 import importlib.util
 import json
 import os
 from pathlib import Path
+import shlex
 import signal
 import stat
 import subprocess
@@ -247,6 +249,22 @@ class RecordingTests(unittest.TestCase):
         record = json.loads(next(self.shared.glob("*.json")).read_text())
         self.assertEqual(record["state"], "launch_failed")
         self.assertIsNone(record["updater_exit"])
+
+    def test_documented_bootstrap_is_pinned_and_shell_valid(self):
+        line = next(line for line in (ROOT / 'README.md').read_text().splitlines()
+                    if line.startswith("ssh -t bibi-admin 'sudo bash -c "))
+        outer = shlex.split(line)
+        self.assertEqual(outer[:3], ['ssh', '-t', 'bibi-admin'])
+        inner = shlex.split(outer[3])
+        self.assertEqual(inner[:3], ['sudo', 'bash', '-c'])
+        script = inner[3]
+        subprocess.run(['bash', '-n'], input=script, text=True, check=True)
+        self.assertIn(hashlib.sha256(SCRIPT.read_bytes()).hexdigest(), script)
+        self.assertIn('/cc8ffd368149ab96cb3e7a08cb200dcf3440e90b/scripts/bibi_record_update.py', script)
+        self.assertLess(script.index('sha256sum --check --status'), script.index('exec /usr/bin/python3'))
+        self.assertIn('-- /usr/local/sbin/bibi-machine-update', script)
+        self.assertIn('mktemp -d /root/', script)
+        self.assertIn('umask 077', script)
 
     def test_bootstrap_records_old_wrapper_without_install(self):
         old = self.root / "old-wrapper"

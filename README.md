@@ -667,16 +667,25 @@ run. A failure before the initial durable snapshot prevents the updater from
 launching. Full logs remain private and available for administrator inspection;
 no promise is made that every termination can produce a final recap.
 
-First-rerun bootstrap instructions are supplied with the recording change's
-handoff: fetch the reviewed recorder at its immutable commit into a private
-root-owned temporary directory, verify its SHA-256, then run it around the
-already-installed old updater. This captures the very first rerun without
-pretending the new wrapper is installed. Do not pipe a remote script to a shell,
-use a moving branch as the recorder download, or bypass provisioning prerequisites.
+For the first rerun with the **older unrecorded wrapper**, after this change has
+landed, use this single SSH command from a Bash-compatible local shell. It fetches
+the reviewed recorder at an immutable commit into a private root-owned temporary
+directory, verifies SHA-256, then records the already-installed old updater:
+
+```bash
+ssh -t bibi-admin 'sudo bash -c '\''set -euo pipefail; umask 077; d=$(mktemp -d /root/bibi-update-bootstrap.XXXXXX); curl --fail --silent --show-error --proto "=https" --tlsv1.2 https://raw.githubusercontent.com/brancusi/bibi-rules-the-world/cc8ffd368149ab96cb3e7a08cb200dcf3440e90b/scripts/bibi_record_update.py -o "$d/recorder.py"; printf "%s  %s\n" 0728dc66e7e047a8c2da71a0961b5f4d93901cd9f6bb178e78ccc995b374d1af "$d/recorder.py" | sha256sum --check --status; exec /usr/bin/python3 "$d/recorder.py" -- /usr/local/sbin/bibi-machine-update'\'''
+```
+
+Fetch/checksum failure prevents the updater from starting. The temporary recorder
+is retained privately under `/root`; run logs and safe summaries use the normal
+paths above. This captures the first rerun without pretending the new wrapper is
+installed. Do not pipe a remote script to a shell, substitute a moving branch for
+the recorder download, or bypass provisioning prerequisites. The pinned recorder
+is independent of `ansible-pull`, which still reconciles the configured branch.
 After that full update installs the wrapper successfully, use the normal single
-SSH command above. The bootstrap itself is a full machine update, not a
-Netlify-only operation; it must be performed by the maintenance administrator
-only after the reviewed change has landed.
+SSH command above (not the bootstrap, which would create nested records).
+The bootstrap itself is a full machine update, not a Netlify-only operation;
+only the maintenance administrator should run it after the reviewed change lands.
 
 ## Memory safety net
 
