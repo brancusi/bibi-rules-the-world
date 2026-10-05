@@ -406,7 +406,7 @@ macos_apply() {
   bibi_install_npm_cli gh-axi@0.1.30 "$(bibi_yaml_scalar gh_axi_integrity)" gh-axi
   bibi_install_npm_cli chrome-devtools-axi@0.1.31 "$(bibi_yaml_scalar chrome_devtools_axi_integrity)" chrome-devtools-axi
   bibi_install_npm_cli lavish-axi@0.1.50 "$(bibi_yaml_scalar lavish_axi_integrity)" lavish-axi
-  bibi_install_npm_cli tasks-axi@0.2.5 "$(bibi_yaml_scalar tasks_axi_integrity)" tasks-axi
+  bibi_install_npm_cli tasks-axi@0.2.6 "$(bibi_yaml_scalar tasks_axi_integrity)" tasks-axi
   bibi_install_npm_cli quota-axi@0.1.29 "$(bibi_yaml_scalar quota_axi_integrity)" quota-axi
 
   bibi_install_firstmate_source
