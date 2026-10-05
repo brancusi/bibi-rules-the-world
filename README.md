@@ -169,7 +169,7 @@ advanced through `/updatefirstmate` instead of silently downgrading it.
 - FirstMate pinned to a reviewed Git commit
 - checksum-pinned Herdr, Treehouse, no-mistakes, and official `doctl` binaries
 - a checksum-pinned Temurin JDK 21 and Clojure CLI in `/opt/bibi/toolchains`
-- exact npm pins for Pi, Wrangler 4.x, Firecrawl CLI, and the required AXI tools
+- exact npm pins for Pi, Wrangler 4.x, Firecrawl CLI, Netlify CLI (Ubuntu compatibility profile), and the required AXI tools
 - exact public Pi package pins plus the Ubuntu set named in
   `cloudflare_skill_names` from the reviewed official `cloudflare/skills`
   checkout
@@ -290,8 +290,51 @@ A bounded swap file and the memory guard's
 service and timer are installed; provisioning runs the guard only in read-only
 report mode and as a pure launch admission query, and never performs a cleanup.
 Provisioning does **not** authenticate
-Cloudflare or doctl, and it does not fetch the private Pi Extensions repository.
+Cloudflare, Netlify, or doctl, and it does not fetch the private Pi Extensions repository.
 Do not interrupt provisioning midway.
+
+### Netlify CLI (Ubuntu compatibility profile)
+
+The default `ubuntu-compat` profile installs `netlify-cli@27.10.2` in the daily
+user's global npm prefix (`~/.local`), exposing `netlify` on PATH. Reduced
+profiles and macOS are unchanged. The pin lives in `group_vars/all.yml`;
+Ansible reconciles absent, older, or newer versions to it, and `bibi-verify`
+checks exact package metadata and command availability. Update the pin in a
+reviewed PR, not with an unpinned global update. Node >=22.13.0 is required;
+the reviewed Node 24.18.0 satisfies this.
+
+As `bibi`, run `netlify login` yourself and complete the browser OAuth flow.
+Authentication remains user-owned local state: never put tokens in Ansible,
+Git, command arguments, or shared logs. Provisioning does not log in or deploy.
+`netlify --version`, `netlify login --help`, and `netlify deploy --help` are
+credential-free availability checks, not proof of an authenticated deployment.
+
+Package caveats for the reviewed 27.10.2 installation:
+
+- Keep `--ignore-scripts`. Netlify's postinstall generates completion and prints
+  onboarding text; skipping it does not prevent CLI help/login startup.
+  esbuild, unix-dgram, and sharp also advertise native lifecycle scripts;
+  build/dev/image-processing functionality may need further platform-specific
+  validation. Their modules loaded on the existing Linux x64 install and an
+  esbuild transform succeeded, but that does not prove a fresh script-disabled
+  install has every native feature. No lifecycle scripts were approved or run
+  during this review.
+- The install reported **15 high-severity findings**, including transitive
+  dependents, not 15 demonstrated exploits. Root advisories concern
+  [sharp/libvips](https://github.com/advisories/GHSA-f88m-g3jw-g9cj),
+  [sharp/libheif](https://github.com/advisories/GHSA-rgj7-g3m4-5g8c),
+  [node-forge RSA verification](https://github.com/advisories/GHSA-86w9-cpqp-85rv),
+  and [braces nested-pattern exhaustion](https://github.com/advisories/GHSA-vfj7-8cjw-p6xm).
+  They concern image decoding, signature verification, and hostile glob patterns;
+  a trusted prebuilt static directory with `deploy --no-build` avoids invoking
+  a project build, but is not a security guarantee. No exploit of the requested
+  OAuth login/static upload path was established; authenticated upload was not
+  tested. Do not process untrusted projects/images/patterns without further review.
+- The global package lacks a lockfile, so a direct `npm audit --omit=dev` there
+  returns `ENOLOCK`; the findings above came from the original install audit.
+  The top-level pin does not freeze transitive resolution. No forced audit fix,
+  dependency override, or script-policy exception is applied. Any such change
+  needs a separate explicit review; these warnings remain unresolved.
 
 ## 5. Configure plain SSH for WezTerm
 
