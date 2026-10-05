@@ -31,10 +31,10 @@ ansible:
 shell:
 	bash -n bin/bibi-setup scripts/render-cloud-init.sh scripts/test-provisioning.sh scripts/setup-common.sh scripts/setup-macos.sh scripts/setup-ubuntu.sh scripts/verify.sh scripts/verify-common.sh scripts/verify-linux.sh scripts/verify-macos.sh tests/test-portable-setup.sh tests/test-firstmate-pin.sh tests/test-herdr-pi-lifecycle.sh
 	shellcheck bin/bibi-setup scripts/render-cloud-init.sh scripts/test-provisioning.sh scripts/setup-common.sh scripts/setup-macos.sh scripts/setup-ubuntu.sh scripts/verify.sh scripts/verify-common.sh scripts/verify-linux.sh scripts/verify-macos.sh tests/test-portable-setup.sh tests/test-firstmate-pin.sh tests/test-herdr-pi-lifecycle.sh
-	shellcheck templates/bibi-launcher.j2 templates/bibi-machine-update.j2 templates/bibi-motd.j2 templates/bibi-pi-extensions-update.j2 templates/bibi-pi-public-packages-update.j2 templates/bibi-private-capabilities-update.j2
+	shellcheck templates/bibi-launcher.j2 templates/bibi-machine-update.j2 templates/bibi-machine-update-command.j2 templates/bibi-motd.j2 templates/bibi-pi-extensions-update.j2 templates/bibi-pi-public-packages-update.j2 templates/bibi-private-capabilities-update.j2
 
 python:
-	python3 -m py_compile scripts/bibi_memory_guard.py tests/test_memory_guard.py tests/test_launch_admission.py
+	python3 -m py_compile scripts/bibi_record_update.py scripts/bibi_memory_guard.py tests/test_memory_guard.py tests/test_launch_admission.py
 	python3 -m unittest discover --start-directory tests --pattern 'test_*.py'
 
 portable:

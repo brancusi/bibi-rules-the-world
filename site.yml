@@ -759,6 +759,22 @@
         group: "{{ bibi_agent_user }}"
         mode: "0755"
 
+    - name: Install the private-output update recorder
+      ansible.builtin.copy:
+        src: scripts/bibi_record_update.py
+        dest: /usr/local/sbin/bibi-record-update
+        owner: root
+        group: root
+        mode: "0755"
+
+    - name: Install the recorded administrator update implementation
+      ansible.builtin.template:
+        src: templates/bibi-machine-update-command.j2
+        dest: /usr/local/sbin/bibi-machine-update-command
+        owner: root
+        group: root
+        mode: "0700"
+
     - name: Install the administrator update command
       ansible.builtin.template:
         src: templates/bibi-machine-update.j2
