@@ -11,7 +11,7 @@ import sys
 import uuid
 
 
-PRIVATE_PATH = "/var/log/bibi-machine-update"
+PRIVATE_PATH = "/var/lib/bibi-machine-update-private"
 SUMMARY_PATH = "/var/lib/bibi-machine-update"
 DIRECTORY_FLAGS = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
 
