@@ -9,7 +9,10 @@ import json
 import os
 from pathlib import Path
 import pwd
+import shutil
+import site
 import subprocess
+import sys
 import tempfile
 import unittest
 
@@ -20,6 +23,37 @@ TASK = "Install the generic authenticated private capability command"
 
 
 class PrivateCapabilitiesRenderTests(unittest.TestCase):
+    def test_user_installed_ansible_with_isolated_home(self):
+        # CI installs Ansible in ~/.local. Model that import dependency without
+        # installing packages or altering the caller's real Python user site.
+        with tempfile.TemporaryDirectory(prefix=".test-user-site-", dir=ROOT) as tmp:
+            root = Path(tmp)
+            home = root / "user"
+            base = home / ".local"
+            user_site = base / "lib" / f"python{sys.version_info.major}.{sys.version_info.minor}" / "site-packages"
+            user_site.mkdir(parents=True)
+            (user_site / "_bibi_ansible_user_site_probe.py").write_text("# synthetic user-site dependency\n")
+            bin_dir = base / "bin"
+            bin_dir.mkdir()
+            launcher = bin_dir / "ansible-playbook"
+            real_ansible = shutil.which("ansible-playbook")
+            self.assertIsNotNone(real_ansible)
+            launcher.write_text(
+                f"#!{sys.executable}\n"
+                "import _bibi_ansible_user_site_probe\n"
+                "import os, sys\n"
+                f"os.execv({real_ansible!r}, [{real_ansible!r}, *sys.argv[1:]])\n"
+            )
+            launcher.chmod(0o755)
+            env = {**os.environ, "HOME": str(home),
+                   "PATH": str(bin_dir) + os.pathsep + os.environ["PATH"]}
+            env.pop("PYTHONUSERBASE", None)
+            result = subprocess.run([
+                sys.executable, str(Path(__file__).resolve()),
+                "PrivateCapabilitiesRenderTests.test_real_task_and_rendered_command",
+            ], env=env, text=True, capture_output=True, timeout=120)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
     def test_real_task_and_rendered_command(self):
         with tempfile.TemporaryDirectory(prefix=".test-private-", dir=ROOT) as tmp:
             root = Path(tmp)
@@ -46,7 +80,10 @@ class PrivateCapabilitiesRenderTests(unittest.TestCase):
                          "ansible_python_interpreter": "/usr/bin/python3"},
                 "tasks": [task],
             }]))
+            # Keep controller imports discoverable when CI installed Ansible
+            # with pip --user; redirecting HOME must not hide its Python modules.
             env = {**os.environ, "HOME": str(home), "ANSIBLE_NOCOLOR": "1",
+                   "PYTHONUSERBASE": site.getuserbase(),
                    "ANSIBLE_LOCAL_TEMP": str(root / "ansible-local"),
                    "ANSIBLE_REMOTE_TEMP": str(root / "ansible-remote")}
             command = ["ansible-playbook", "-i", "localhost,", str(play)]
