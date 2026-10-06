@@ -143,6 +143,14 @@ authenticate as the daily user, and run
 the same complete preflight before installing. Tokens are never accepted
 in the manifest, argv, receipt, or repository.
 
+`make lint` discovers `tests/test_private_capabilities_render.py`. It runs only
+this installer's actual Ansible template task as the current unprivileged user,
+with a temporary home/destination, then exercises the rendered Bash command's
+plan, validation, and apply ordering with fake `gh`/`pi` commands. It checks both
+Pi-home substitutions and the 0/1/32/33-source boundaries; it does not provision
+the host, authenticate, or install private packages. Bash array-length checks
+are narrowly protected with Jinja raw blocks, leaving real substitutions active.
+
 ## Upgrade and rollback
 
 Change versions, commits, hashes, and npm integrities only in a reviewed PR.
