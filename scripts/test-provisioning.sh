@@ -11,7 +11,7 @@ fail() {
 }
 
 # Firstmate's backlog update/mv contract requires >=0.2.6; retain an exact
-# provisioning pin, and keep the portable installer on that reviewed release.
+# provisioning pin, and keep the portable installer on every reviewed AXI release.
 python3 - "$root_dir" <<'PY'
 import pathlib
 import re
@@ -24,7 +24,9 @@ specs = [s for s in pins['axi_packages'] if s.startswith('tasks-axi@')]
 assert len(specs) == 1, 'expected one tasks-axi pin'
 match = re.fullmatch(r'tasks-axi@(\d+)\.(\d+)\.(\d+)', specs[0])
 assert match and tuple(map(int, match.groups())) >= (0, 2, 6), 'Firstmate requires tasks-axi >=0.2.6'
-assert f'bibi_install_npm_cli {specs[0]} ' in (root / 'scripts/setup-macos.sh').read_text()
+portable = (root / 'scripts/setup-macos.sh').read_text()
+for spec in pins['axi_packages']:
+    assert f'bibi_install_npm_cli {spec} ' in portable, f'portable installer does not pin {spec}'
 PY
 
 # Every helper below writes its playbook output to a log instead of the console,
@@ -617,9 +619,9 @@ global_specs=(
   'netlify-cli@27.10.2'
   'gh-axi@0.1.30'
   'chrome-devtools-axi@0.1.31'
-  'lavish-axi@0.1.50'
+  'lavish-axi@0.1.82'
   'tasks-axi@0.2.6'
-  'quota-axi@0.1.29'
+  'quota-axi@0.1.58'
 )
 for spec in "${global_specs[@]}"; do
   make_package_metadata "$global_npm_root" "$spec"
@@ -647,7 +649,7 @@ pi_package=@earendil-works/pi-coding-agent@0.83.0
 wrangler_package=wrangler@4.125.0
 firecrawl_cli_package=firecrawl-cli@1.19.27
 netlify_cli_package=netlify-cli@27.10.2
-axi_packages=gh-axi@0.1.30 chrome-devtools-axi@0.1.31 lavish-axi@0.1.50 tasks-axi@0.2.6 quota-axi@0.1.29
+axi_packages=gh-axi@0.1.30 chrome-devtools-axi@0.1.31 lavish-axi@0.1.82 tasks-axi@0.2.6 quota-axi@0.1.58
 pi_public_packages=npm:@tmustier/pi-files-widget@0.2.0 npm:pi-web-access@0.24.0
 cloudflare_skills_repo=https://github.com/cloudflare/skills.git
 cloudflare_skills_ref=$verify_skills_ref

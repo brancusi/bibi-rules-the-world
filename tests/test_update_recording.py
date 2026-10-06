@@ -176,6 +176,103 @@ class RecordingTests(unittest.TestCase):
         good = recorder.checked_directory(fd, "shared", 0o755, os.getuid())
         os.close(good)
 
+    def run_cli_in_fixture_root(self, code, modes=(), prepare=None, script=SCRIPT):
+        """Run the real CLI (main, recording_directory, __main__ handler) over a fixture '/'.
+
+        Root is simulated only: euid/egid read as 0, os.open("/") opens the fixture
+        root, and fstat reports fixture-owned inodes as uid/gid 0. File modes,
+        directory traversal, mkdir, umask and the updater child are all real.
+        """
+        top = Path(tempfile.mkdtemp(dir=self.root))
+        # Stock Ubuntu 24.04: rsyslog tmpfiles keep /var/log root:syslog 0775.
+        layout = {"": 0o755, "var": 0o755, "var/log": 0o775, "var/lib": 0o755, **dict(modes)}
+        for name, mode in layout.items():
+            (top / name).mkdir(exist_ok=True)
+            (top / name).chmod(mode)
+        if prepare:
+            prepare(top)
+        marker = top / "updater-started"
+        child = f"open({str(marker)!r}, 'w').close(); {code}"
+        harness = (
+            "import os, runpy, sys\n"
+            "top, script, child = sys.argv[1:4]\n"
+            "real_open, real_fstat, me = os.open, os.fstat, os.getuid()\n"
+            "def fixture_open(path, flags, mode=0o777, *, dir_fd=None):\n"
+            "    return real_open(top if path == '/' and dir_fd is None else path, flags, mode, dir_fd=dir_fd)\n"
+            "def as_root(fd):\n"
+            "    info = real_fstat(fd)\n"
+            "    if info.st_uid != me:\n"
+            "        return info\n"
+            "    return os.stat_result(tuple(info)[:4] + (0, 0) + tuple(info)[6:])\n"
+            "os.geteuid = os.getegid = lambda: 0\n"
+            "os.open, os.fstat = fixture_open, as_root\n"
+            "sys.argv = [script, '--', sys.executable, '-c', child]\n"
+            "runpy.run_path(script, run_name='__main__')\n"
+        )
+        result = subprocess.run([sys.executable, "-c", harness, str(top), str(script), child],
+                                capture_output=True, timeout=20)
+        return result, top, marker.exists()
+
+    def test_cli_records_on_stock_ubuntu_layout(self):
+        # Live failure: the cc8ffd3 recorder refused root:syslog 0775 /var/log and
+        # exited 74 before launching the updater. Both destinations are now under
+        # root-owned 0755 /var/lib, and /var/log is never traversed.
+        result, top, started = self.run_cli_in_fixture_root(
+            f"print('PRIVATE_TOKEN=fixture-secret'); print({RECAP!r}, end='')")
+        self.assertEqual((result.returncode, result.stderr), (0, b""))
+        self.assertTrue(started)
+        self.assertIn(b"fixture-secret", result.stdout)
+        private, shared = top / "var/lib/bibi-machine-update-private", top / "var/lib/bibi-machine-update"
+        self.assertEqual(stat.S_IMODE(private.stat().st_mode), 0o700)
+        self.assertEqual(stat.S_IMODE(shared.stat().st_mode), 0o755)
+        self.assertEqual(sorted(p.name for p in (top / "var/log").iterdir()), [])
+        log, summary = next(private.glob("*.log")), next(shared.glob("*.json"))
+        self.assertEqual(log.stem, summary.stem)
+        self.assertEqual(stat.S_IMODE(log.stat().st_mode), 0o600)
+        self.assertEqual(stat.S_IMODE(summary.stat().st_mode), 0o644)
+        self.assertIn("fixture-secret", log.read_text())
+        self.assertNotIn(b"fixture-secret", summary.read_bytes())
+        record = json.loads(summary.read_text())
+        self.assertEqual((record["state"], record["updater_exit"], record["log_complete"]),
+                         ("completed", 0, True))
+        self.assertEqual(record["recap"]["changed"], 2)
+        self.assertIsNotNone(record["finished_at"])
+
+    def test_cli_propagates_failure_without_recap_on_stock_ubuntu_layout(self):
+        result, top, started = self.run_cli_in_fixture_root(
+            "import sys; print('raw secret error'); sys.exit(9)")
+        self.assertEqual((result.returncode, result.stderr, started), (9, b"", True))
+        record = json.loads(next((top / "var/lib/bibi-machine-update").glob("*.json")).read_text())
+        self.assertEqual((record["state"], record["updater_exit"], record["recap"]), ("completed", 9, None))
+        self.assertNotIn("raw secret", json.dumps(record))
+
+    def test_cli_refuses_unsafe_ancestor_or_destination_before_launch(self):
+        def existing(name, mode):
+            def prepare(top):
+                (top / "var/lib" / name).mkdir()
+                (top / "var/lib" / name).chmod(mode)
+            return prepare
+
+        def linked(top):
+            (top / "elsewhere").mkdir(mode=0o700)
+            (top / "var/lib/bibi-machine-update-private").symlink_to(top / "elsewhere")
+
+        cases = {
+            "group-writable /var/lib": ({"var/lib": 0o775}, None),
+            "world-writable /var": ({"var": 0o777}, None),
+            "group-readable private directory": ((), existing("bibi-machine-update-private", 0o750)),
+            "group-writable summary directory": ((), existing("bibi-machine-update", 0o775)),
+            "symlinked private directory": ((), linked),
+        }
+        for label, (modes, prepare) in cases.items():
+            with self.subTest(label):
+                result, top, started = self.run_cli_in_fixture_root("print('ran')", modes, prepare)
+                self.assertEqual(result.returncode, 74)
+                self.assertEqual(result.stderr.strip(),
+                                 b"Update recording failed; administrator inspection is required.")
+                self.assertFalse(started)
+                self.assertEqual(list((top / "var/lib").glob("bibi-machine-update/*.json")), [])
+
     def test_initial_summary_failure_prevents_launch(self):
         private = os.open(self.private, recorder.DIRECTORY_FLAGS)
         shared = os.open(self.shared, recorder.DIRECTORY_FLAGS)
@@ -260,7 +357,7 @@ class RecordingTests(unittest.TestCase):
         script = inner[3]
         subprocess.run(['bash', '-n'], input=script, text=True, check=True)
         self.assertIn(hashlib.sha256(SCRIPT.read_bytes()).hexdigest(), script)
-        self.assertIn('/cc8ffd368149ab96cb3e7a08cb200dcf3440e90b/scripts/bibi_record_update.py', script)
+        self.assertIn('/add07d95b2c81e1ee482777aa7ca4f890b1a41aa/scripts/bibi_record_update.py', script)
         self.assertLess(script.index('sha256sum --check --status'), script.index('exec /usr/bin/python3'))
         self.assertIn('-- /usr/local/sbin/bibi-machine-update', script)
         self.assertIn('mktemp -d /root/', script)
