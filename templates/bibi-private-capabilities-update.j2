@@ -25,7 +25,12 @@ while IFS= read -r line || [[ -n "$line" ]]; do
   fi
   if [[ "$line" =~ ^source=git:https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+\.git@([0-9a-f]{40})$ ]]; then
     source=${line#source=}
+    # Keep Bash array length literal during Ansible rendering.
+    # {% raw %}
+
     ((${#sources[@]} < 32)) || { echo "private manifest exceeds 32 sources" >&2; exit 1; }
+    # {% endraw %}
+
     [[ "$seen_sources" != *"|$source|"* ]] || { echo "duplicate private manifest source" >&2; exit 1; }
     sources+=("$source")
     seen_sources+="$source|"
@@ -35,7 +40,11 @@ while IFS= read -r line || [[ -n "$line" ]]; do
   fi
 done < "$manifest"
 [[ "$schema_seen" == true ]] || { echo "missing schema=bibi-private-capabilities.v1" >&2; exit 1; }
+# {% raw %}
+
 ((${#sources[@]} > 0)) || { echo "private manifest contains no sources" >&2; exit 1; }
+# {% endraw %}
+
 
 printf 'Private Pi home: %s\n' "{{ bibi_pi_home }}"
 printf 'Exact reviewed sources:\n'
