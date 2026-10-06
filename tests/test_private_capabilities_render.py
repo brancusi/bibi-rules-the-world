@@ -45,7 +45,11 @@ class PrivateCapabilitiesRenderTests(unittest.TestCase):
                 f"os.execv({real_ansible!r}, [{real_ansible!r}, *sys.argv[1:]])\n"
             )
             launcher.chmod(0o755)
+            # Preserve the real controller's installed dependencies, not the
+            # synthetic probe's user-site path: that must still come from HOME
+            # and the inner fixture's preserved PYTHONUSERBASE.
             env = {**os.environ, "HOME": str(home),
+                   "PYTHONPATH": os.pathsep.join(sys.path),
                    "PATH": str(bin_dir) + os.pathsep + os.environ["PATH"]}
             env.pop("PYTHONUSERBASE", None)
             result = subprocess.run([
