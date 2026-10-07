@@ -770,7 +770,8 @@ memory_guard_state_dir: "$guard_state/var"
 memory_guard_state_file: "$guard_state/var/status.json"
 memory_guard_lock_file: "$guard_state/var/run.lock"
 memory_guard_axi_state_dir: "$guard_home/.chrome-devtools-axi"
-memory_guard_firstmate_state_dir: "$guard_home/firstmate/state"
+memory_guard_firstmate_state_dir: "$guard_home/.local/share/firstmate/instances/main/state"
+memory_guard_legacy_firstmate_state_dir: "$guard_home/firstmate/state"
 memory_guard_worktree_root: "$guard_home/.treehouse"
 memory_guard_owner_commands: [claude, pi]
 memory_guard_mem_available_warn_percent: 20
@@ -811,6 +812,9 @@ must_succeed "$tmp_dir/memory-guard-first.log" "clean memory guard installation 
 [[ -x "$guard_state/sbin/bibi-memory-guard" ]] || fail "memory guard was not installed"
 grep -q "^worktree_root=$guard_home/.treehouse$" "$guard_state/etc/bibi-memory-guard.conf" \
   || fail "memory guard policy did not render its ownership oracles"
+# The fixture home has a legacy Firstmate state directory, so it is the oracle.
+grep -q "^firstmate_state_dir=$guard_home/firstmate/state$" "$guard_state/etc/bibi-memory-guard.conf" \
+  || fail "memory guard policy did not select the existing legacy Firstmate state"
 grep -q '^ExecStart=.*bibi-memory-guard once$' "$guard_state/systemd/bibi-memory-guard.service" \
   || fail "memory guard service does not run the guard"
 grep -q '^OnUnitInactiveSec=15min$' "$guard_state/systemd/bibi-memory-guard.timer" \

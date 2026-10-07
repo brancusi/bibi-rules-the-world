@@ -29,8 +29,8 @@ ansible:
 	ansible-playbook --syntax-check -i 'localhost,' tests/fixtures/swap-safety-net-install.yml
 
 shell:
-	bash -n bin/bibi-setup scripts/render-cloud-init.sh scripts/test-provisioning.sh scripts/setup-common.sh scripts/setup-macos.sh scripts/setup-ubuntu.sh scripts/verify.sh scripts/verify-common.sh scripts/verify-linux.sh scripts/verify-macos.sh tests/test-portable-setup.sh tests/test-firstmate-pin.sh tests/test-herdr-pi-lifecycle.sh
-	shellcheck bin/bibi-setup scripts/render-cloud-init.sh scripts/test-provisioning.sh scripts/setup-common.sh scripts/setup-macos.sh scripts/setup-ubuntu.sh scripts/verify.sh scripts/verify-common.sh scripts/verify-linux.sh scripts/verify-macos.sh tests/test-portable-setup.sh tests/test-firstmate-pin.sh tests/test-herdr-pi-lifecycle.sh
+	bash -n bin/bibi-setup scripts/render-cloud-init.sh scripts/bibi-admin-update.sh scripts/test-provisioning.sh scripts/setup-common.sh scripts/setup-macos.sh scripts/setup-ubuntu.sh scripts/verify.sh scripts/verify-common.sh scripts/verify-linux.sh scripts/verify-macos.sh tests/test-portable-setup.sh tests/test-firstmate-pin.sh tests/test-herdr-pi-lifecycle.sh
+	shellcheck bin/bibi-setup scripts/render-cloud-init.sh scripts/bibi-admin-update.sh scripts/test-provisioning.sh scripts/setup-common.sh scripts/setup-macos.sh scripts/setup-ubuntu.sh scripts/verify.sh scripts/verify-common.sh scripts/verify-linux.sh scripts/verify-macos.sh tests/test-portable-setup.sh tests/test-firstmate-pin.sh tests/test-herdr-pi-lifecycle.sh
 	shellcheck templates/bibi-launcher.j2 templates/bibi-machine-update.j2 templates/bibi-machine-update-command.j2 templates/bibi-motd.j2 templates/bibi-pi-extensions-update.j2 templates/bibi-pi-public-packages-update.j2 templates/bibi-private-capabilities-update.j2
 
 python:

@@ -60,6 +60,28 @@
     mode: "0755"
   register: memory_guard_program
 
+# The isolated instance's task state is the default oracle, but on a host that
+# still runs the Firstmate home that predates it, that state is where the
+# worktree pool's owners are recorded. Selecting it changes only which evidence
+# is read; every ownership check the guard applies stays the same. A redirected
+# or foreign-owned directory is never selected.
+- name: Inspect the legacy Firstmate task state
+  ansible.builtin.stat:
+    path: "{{ memory_guard_legacy_firstmate_state_dir }}"
+    follow: false
+    get_checksum: false
+  register: memory_guard_legacy_firstmate_state
+
+- name: Select the Firstmate task state that owns the guarded worktree pool
+  ansible.builtin.set_fact:
+    memory_guard_selected_firstmate_state_dir: >-
+      {{ memory_guard_legacy_firstmate_state_dir
+      if (memory_guard_legacy_firstmate_state.stat.exists
+          and memory_guard_legacy_firstmate_state.stat.isdir
+          and not memory_guard_legacy_firstmate_state.stat.islnk
+          and memory_guard_legacy_firstmate_state.stat.pw_name == bibi_agent_user)
+      else memory_guard_firstmate_state_dir }}
+
 - name: Install the reviewed memory guard policy
   ansible.builtin.template:
     src: "{{ memory_guard_config_template }}"
