@@ -219,6 +219,10 @@ memory_guard_lock_file: "/run/bibi-memory-guard/run.lock"
 # worktree finished or disappeared; every name here is protective only.
 memory_guard_axi_state_dir: "{{ bibi_agent_home }}/.chrome-devtools-axi"
 memory_guard_firstmate_state_dir: "{{ firstmate_instance_home }}/state"
+# A host whose Firstmate predates the isolated instance keeps its task state
+# here. When that directory exists, it is the oracle the reaper reads instead,
+# because its tasks are the ones that claim the guarded worktree pool.
+memory_guard_legacy_firstmate_state_dir: "{{ bibi_agent_home }}/firstmate/state"
 memory_guard_worktree_root: "{{ bibi_agent_home }}/.treehouse"
 memory_guard_owner_commands:
   - "claude"

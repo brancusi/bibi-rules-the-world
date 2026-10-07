@@ -8,18 +8,46 @@ fi
 
 receipt=/etc/bibi-provisioned-versions
 [[ -f "$receipt" && ! -L "$receipt" ]] || { echo "Missing direct machine receipt: $receipt" >&2; exit 1; }
-profiles=$(awk -F= '$1 == "profiles" { print substr($0, index($0, "=") + 1); found=1; exit } END { if (!found) exit 1 }' "$receipt")
-backend=$(awk -F= '$1 == "backend" { print substr($0, index($0, "=") + 1); found=1; exit } END { if (!found) exit 1 }' "$receipt")
+
+# Print how many lines record a key, so a duplicate is refused rather than one
+# of its values being chosen.
+key_count() {
+  awk -F= -v key="$1" '$1 == key { n++ } END { print n + 0 }' "$receipt"
+}
+key_value() {
+  awk -F= -v key="$1" '$1 == key { print substr($0, index($0, "=") + 1); exit }' "$receipt"
+}
+
+ansible_pull=(
+  ansible-pull
+  --url "{{ bibi_config_repo_url }}"
+  --checkout "{{ bibi_config_repo_ref }}"
+  --inventory "localhost,"
+  --connection local
+)
+
+# Receipts written before selectable profiles never carry firstmate_home,
+# profiles, or backend. Such a host was reconciled by the former wrapper, which
+# passed no selection and so applied this repository's own defaults; keep doing
+# exactly that until this run records a current receipt. A receipt carrying any
+# current key is current, and must then select profiles and backend itself.
+if [[ $(key_count firstmate_home) == 0 && $(key_count profiles) == 0 && $(key_count backend) == 0 ]]; then
+  [[ $(key_count configuration_repo) == 1 && $(key_count firstmate_ref) == 1 ]] \
+    || { echo "Unrecognised machine receipt: $receipt" >&2; exit 1; }
+  [[ $(key_value configuration_repo) == "{{ bibi_config_repo_url }}" ]] \
+    || { echo "Legacy machine receipt names another configuration repository: $receipt" >&2; exit 1; }
+  echo "Legacy machine receipt: applying the repository's reviewed default profiles and backend." >&2
+  exec "${ansible_pull[@]}" site.yml
+fi
+
+for key in profiles backend; do
+  [[ $(key_count "$key") == 1 ]] || { echo "Machine receipt must record $key exactly once: $receipt" >&2; exit 1; }
+done
+profiles=$(key_value profiles)
+backend=$(key_value backend)
 [[ "$profiles" =~ ^[a-z0-9-]+(,[a-z0-9-]+)*$ ]] || { echo "Invalid profiles in $receipt" >&2; exit 1; }
 [[ "$backend" == herdr || "$backend" == tmux ]] || { echo "Invalid backend in $receipt" >&2; exit 1; }
 extra_vars=$(jq -cn --arg profiles "$profiles" --arg backend "$backend" \
   '{bibi_profiles: ($profiles | split(",")), bibi_backend: $backend}')
 
-exec ansible-pull \
-  --url "{{ bibi_config_repo_url }}" \
-  --checkout "{{ bibi_config_repo_ref }}" \
-  --inventory "localhost," \
-  --connection local \
-  --extra-vars "$extra_vars" \
-  site.yml
-
+exec "${ansible_pull[@]}" --extra-vars "$extra_vars" site.yml

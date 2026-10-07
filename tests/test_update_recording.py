@@ -331,7 +331,8 @@ class RecordingTests(unittest.TestCase):
         self.assertIn("exec /usr/local/sbin/bibi-record-update -- /usr/local/sbin/bibi-machine-update-command", wrapper)
         self.assertNotIn("receipt=", wrapper)
         self.assertIn("receipt=/etc/bibi-provisioned-versions", command)
-        self.assertIn('exec ansible-pull', command)
+        self.assertIn('  ansible-pull\n', command)
+        self.assertIn('exec "${ansible_pull[@]}"', command)
         self.assertLess(site.index('src: scripts/bibi_record_update.py'), site.index('src: templates/bibi-machine-update.j2'))
         self.assertLess(site.index('src: templates/bibi-machine-update-command.j2'), site.index('src: templates/bibi-machine-update.j2'))
 

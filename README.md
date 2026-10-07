@@ -606,6 +606,13 @@ sudo ansible-playbook -i 'localhost,' shared-clojure-toolchain.yml
 ssh -t bibi-admin 'sudo /usr/local/sbin/bibi-machine-update'
 ```
 
+A receipt written before profiles existed records none of `firstmate_home`,
+`profiles`, or `backend`. For that receipt alone, and only when it names this
+configuration repository, the command applies the repository's default profiles
+and backend, as the older wrapper that wrote it did; the run then records a
+current receipt. A current receipt must record a valid `profiles` and `backend`
+exactly once, or the command stops with a message before `ansible-pull`.
+
 For `ubuntu-compat`, the machine update reconciles Wrangler, public Pi packages,
 and the official Cloudflare skill checkout for `bibi` without touching
 credentials. Narrow profiles reconcile only their selected optional surfaces.
@@ -687,6 +694,13 @@ directory, verifies SHA-256, then records the already-installed old updater:
 ```bash
 ssh -t bibi-admin 'sudo bash -c '\''set -euo pipefail; umask 077; d=$(mktemp -d /root/bibi-update-bootstrap.XXXXXX); curl --fail --silent --show-error --proto "=https" --tlsv1.2 https://raw.githubusercontent.com/brancusi/bibi-rules-the-world/add07d95b2c81e1ee482777aa7ca4f890b1a41aa/scripts/bibi_record_update.py -o "$d/recorder.py"; printf "%s  %s\n" 57bd265d62c28e63dbe3957b1ab6d8d28fa50b799272c197b39c4e1eb67b35e3 "$d/recorder.py" | sha256sum --check --status; exec /usr/bin/python3 "$d/recorder.py" -- /usr/local/sbin/bibi-machine-update'\'''
 ```
+
+The same command is saved as `scripts/bibi-admin-update.sh`, so it never has to
+be copied out of a terminal. Run `bash bibi-admin-update.sh` from the
+administrator's own computer, where the `bibi-admin` SSH alias works. Once the
+recorded wrapper is installed it runs that instead, so the saved script stays
+correct for later updates. Never place it on the server for `sudo` to run from
+the `bibi` account's files: anything `bibi` can edit would then run as root.
 
 Fetch/checksum failure prevents the updater from starting. Do not reuse the
 earlier `cc8ffd3` bootstrap: that recorder refused Ubuntu's group-writable
@@ -912,6 +926,17 @@ Positive ownership proof is exactly one of:
 - the worktree is claimed by a FirstMate task whose last status line is `done:`
   or `failed:`, whose busy flag is not set *and fresh*, whose status file is at
   least 900 s old, and in which no agent harness process is still running.
+
+The task state the guard reads is the isolated instance's
+(`memory_guard_firstmate_state_dir`), except on a host whose Firstmate predates
+that instance: when `memory_guard_legacy_firstmate_state_dir`
+(`~bibi/firstmate/state`) is a real directory owned by `bibi`, reconciliation
+selects it instead, because those tasks are the ones claiming the guarded
+worktree pool. Without it such a host gets a state directory that does not
+exist, so every finished task's tree is refused as `unclaimed-worktree`. That
+fails safe, but the reaper stops cleaning. Selection changes only which evidence
+is read; every check above still applies, and a symlinked or foreign-owned
+directory is never selected.
 
 Treehouse pool slots are recycled, so several FirstMate tasks can name the same
 worktree over time. When more than one claims it, the **most protective** claim
